@@ -18,9 +18,15 @@ on:
 permissions:
   contents: write
 
+# One build per branch or tag at a time; a newer run replaces one still going.
+concurrency:
+  group: build-mac-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   mac:
     runs-on: macos-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
 
