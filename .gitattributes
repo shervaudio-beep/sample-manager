@@ -1,0 +1,6 @@
+# Keep line endings consistent between Windows and macOS checkouts.
+* text=auto eol=lf
+*.png binary
+*.wav binary
+*.aif binary
+*.aiff binary
