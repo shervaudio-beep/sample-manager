@@ -15,7 +15,7 @@ import { CATEGORIES, DRUM_SUBTYPES } from '../shared/types'
 
 export type Db = DatabaseSync
 
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 
 const MIGRATIONS: Record<number, string> = {
   1: `
@@ -86,6 +86,16 @@ const MIGRATIONS: Record<number, string> = {
       file_id        INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
       position       INTEGER NOT NULL,
       PRIMARY KEY (collection_id, file_id)
+    );
+  `,
+  2: `
+    -- Waveform peaks drawn by the player, cached so a file is only decoded once.
+    -- Tied to the file's mtime: if the file changes, the cache entry is ignored.
+    CREATE TABLE waveforms (
+      file_id   INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+      mtime_ms  INTEGER NOT NULL,
+      duration  REAL NOT NULL,
+      peaks     TEXT NOT NULL
     );
   `
 }
@@ -271,4 +281,28 @@ export function libraryCounts(db: Db): LibraryCounts {
   }
   const { n: missing } = db.prepare(`SELECT COUNT(*) AS n FROM files WHERE status = 'missing'`).get() as { n: number }
   return { total, missing, byCategory, bySubtype }
+}
+
+// ---------- waveforms ----------
+
+export interface Waveform {
+  duration: number
+  peaks: number[][]
+}
+
+export function getWaveform(db: Db, fileId: number): Waveform | null {
+  const r = db
+    .prepare(
+      `SELECT w.duration, w.peaks FROM waveforms w JOIN files f ON f.id = w.file_id
+       WHERE w.file_id = ? AND w.mtime_ms = f.mtime_ms`
+    )
+    .get(fileId) as { duration: number; peaks: string } | undefined
+  return r ? { duration: r.duration, peaks: JSON.parse(r.peaks) } : null
+}
+
+export function saveWaveform(db: Db, fileId: number, wf: Waveform): void {
+  db.prepare(
+    `INSERT OR REPLACE INTO waveforms (file_id, mtime_ms, duration, peaks)
+     SELECT id, mtime_ms, ?, ? FROM files WHERE id = ?`
+  ).run(wf.duration, JSON.stringify(wf.peaks), fileId)
 }

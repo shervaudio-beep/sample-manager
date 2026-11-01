@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Category, DrumSubtype, LibraryCounts, Root, ScanEvent, SortField } from '../../shared/types'
+import type { Category, DrumSubtype, FileRow, LibraryCounts, Root, ScanEvent, SortField } from '../../shared/types'
 import { CATEGORY_LABELS, SUBTYPE_LABELS } from '../../shared/types'
 import { FileTable } from './FileTable'
 import { Inspector } from './Inspector'
+import { PlayerBar, type PlayerHandle } from './PlayerBar'
 import { Sidebar } from './Sidebar'
 import { useFileList } from './useFileList'
 
@@ -25,10 +26,12 @@ export function App(): React.JSX.Element {
   const [counts, setCounts] = useState<LibraryCounts | null>(null)
   const [view, setView] = useState<View>({})
   const [sort, setSort] = useState<{ field: SortField; desc: boolean }>({ field: 'dateAdded', desc: true })
-  const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [selected, setSelected] = useState<{ id: number; index: number } | null>(null)
   const [version, setVersion] = useState(0)
   const [scan, setScan] = useState<ScanState>({ running: false, rootPath: '', found: 0, processed: 0, message: '' })
   const lastRefresh = useRef(0)
+  const player = useRef<PlayerHandle>(null)
+  const heldArrow = useRef(false)
 
   const refreshLibrary = useCallback(() => {
     window.api.listRoots().then(setRoots)
@@ -78,8 +81,53 @@ export function App(): React.JSX.Element {
     version
   )
 
-  const onSort = (field: SortField): void =>
+  const onSort = (field: SortField): void => {
     setSort((s) => (s.field === field ? { field, desc: !s.desc } : { field, desc: field === 'dateAdded' || field === 'size' }))
+    setSelected(null)
+  }
+
+  const select = (index: number, row: FileRow, preview = true): void => {
+    setSelected({ id: row.id, index })
+    if (preview) player.current?.play(row)
+  }
+
+  // Space: play/stop. Up/Down: move through results and auto-preview. Esc: stop.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      const t = e.target as HTMLElement
+      if (t.closest('input, textarea, select, [contenteditable]') || e.metaKey || e.ctrlKey || e.altKey) return
+      const current = selected ? list.rowAt(selected.index) : undefined
+      if (e.code === 'Space') {
+        e.preventDefault()
+        player.current?.toggle(current ?? null)
+      } else if (e.code === 'Escape') {
+        player.current?.stop()
+      } else if (e.code === 'ArrowDown' || e.code === 'ArrowUp') {
+        e.preventDefault()
+        if (!list.total) return
+        const step = e.code === 'ArrowDown' ? 1 : -1
+        const next = selected ? Math.min(list.total - 1, Math.max(0, selected.index + step)) : 0
+        if (selected && next === selected.index) return
+        const row = list.rowAt(next)
+        // Holding the key scrolls without firing a preview per row; the release previews.
+        if (row) select(next, row, !e.repeat)
+        heldArrow.current = e.repeat
+      }
+    }
+    const onKeyUp = (e: KeyboardEvent): void => {
+      if ((e.code === 'ArrowDown' || e.code === 'ArrowUp') && heldArrow.current && selected) {
+        heldArrow.current = false
+        const row = list.rowAt(selected.index)
+        if (row) player.current?.play(row)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    window.addEventListener('keyup', onKeyUp)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('keyup', onKeyUp)
+    }
+  })
 
   return (
     <div className="app">
@@ -90,7 +138,7 @@ export function App(): React.JSX.Element {
         scan={scan}
         onView={(v) => {
           setView(v)
-          setSelectedId(null)
+          setSelected(null)
         }}
         onAddFolders={() => window.api.addRoots().then(refreshLibrary)}
         onRemoveRoot={async (root) => {
@@ -114,9 +162,10 @@ export function App(): React.JSX.Element {
             </div>
           )}
         </div>
-        <FileTable list={list} sort={sort} onSort={onSort} selectedId={selectedId} onSelect={setSelectedId} />
+        <FileTable list={list} sort={sort} onSort={onSort} selected={selected} onSelect={select} />
       </main>
-      <Inspector fileId={selectedId} version={version} />
+      <Inspector fileId={selected?.id ?? null} version={version} />
+      <PlayerBar ref={player} />
     </div>
   )
 }

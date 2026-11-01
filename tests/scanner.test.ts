@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { addRoot, countFiles, libraryCounts, openDb, type Db } from '../src/main/db'
+import { addRoot, countFiles, getWaveform, libraryCounts, openDb, removeRoot, saveWaveform, type Db } from '../src/main/db'
 import { isAudioFile, scanRoot } from '../src/main/scan/scanner'
 import { makeWav, tempDir, writeTree } from './helpers'
 
@@ -182,4 +182,33 @@ describe('scanRoot', () => {
     const again = await scanRoot(db, root.id)
     expect(again).toMatchObject({ added: 0, unchanged: 2000 })
   }, 60_000)
+})
+
+describe('waveform cache', () => {
+  it('returns cached peaks until the file changes on disk', async () => {
+    const file = path.join(lib, 'pad.wav')
+    writeTree(lib, { 'pad.wav': makeWav(2) })
+    const root = addRoot(db, lib)
+    await scanRoot(db, root.id)
+    const id = rowByName('pad.wav')!.id as number
+
+    expect(getWaveform(db, id)).toBeNull()
+    saveWaveform(db, id, { duration: 2, peaks: [[0, 0.5, -0.5]] })
+    expect(getWaveform(db, id)).toEqual({ duration: 2, peaks: [[0, 0.5, -0.5]] })
+
+    writeFileSync(file, makeWav(3))
+    const later = new Date(Date.now() + 10_000)
+    utimesSync(file, later, later)
+    await scanRoot(db, root.id)
+    expect(getWaveform(db, id)).toBeNull()
+  })
+
+  it('is removed with its library folder', async () => {
+    writeTree(lib, { 'pad.wav': makeWav(1) })
+    const root = addRoot(db, lib)
+    await scanRoot(db, root.id)
+    saveWaveform(db, rowByName('pad.wav')!.id, { duration: 1, peaks: [[0]] })
+    removeRoot(db, root.id)
+    expect(db.prepare('SELECT COUNT(*) AS n FROM waveforms').get()).toEqual({ n: 0 })
+  })
 })

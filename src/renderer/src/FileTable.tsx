@@ -1,7 +1,7 @@
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useEffect, useRef } from 'react'
 import { CATEGORY_SHORT, SUBTYPE_LABELS } from '../../shared/types'
-import type { SortField } from '../../shared/types'
+import type { FileRow, SortField } from '../../shared/types'
 import { formatBpm, formatDate, formatDuration, formatSize, stripExt } from './format'
 import type { FileList } from './useFileList'
 
@@ -9,8 +9,8 @@ interface Props {
   list: FileList
   sort: { field: SortField; desc: boolean }
   onSort: (f: SortField) => void
-  selectedId: number | null
-  onSelect: (id: number) => void
+  selected: { id: number; index: number } | null
+  onSelect: (index: number, row: FileRow) => void
 }
 
 const COLUMNS: Array<{ field: SortField; label: string; className: string }> = [
@@ -26,7 +26,7 @@ const COLUMNS: Array<{ field: SortField; label: string; className: string }> = [
 
 const ROW_HEIGHT = 30
 
-export function FileTable({ list, sort, onSort, selectedId, onSelect }: Props): React.JSX.Element {
+export function FileTable({ list, sort, onSort, selected, onSelect }: Props): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null)
   const virtualizer = useVirtualizer({
     count: list.total,
@@ -41,6 +41,12 @@ export function FileTable({ list, sort, onSort, selectedId, onSelect }: Props): 
   useEffect(() => {
     list.ensureRange(first, last)
   }, [first, last, list])
+
+  // Keep the keyboard selection on screen.
+  const selectedIndex = selected?.index
+  useEffect(() => {
+    if (selectedIndex != null) virtualizer.scrollToIndex(selectedIndex, { align: 'auto' })
+  }, [selectedIndex, virtualizer])
 
   return (
     <div className="table">
@@ -63,9 +69,15 @@ export function FileTable({ list, sort, onSort, selectedId, onSelect }: Props): 
             return (
               <div
                 key={vi.key}
-                className={`tr${f.id === selectedId ? ' selected' : ''}${f.status !== 'ok' ? ' dim' : ''}`}
+                className={`tr${f.id === selected?.id ? ' selected' : ''}${f.status !== 'ok' ? ' dim' : ''}`}
                 style={style}
-                onClick={() => onSelect(f.id)}
+                onClick={() => onSelect(vi.index, f)}
+                draggable={f.status === 'ok'}
+                onDragStart={(e) => {
+                  // Hand off to the OS drag so Ableton/Finder/Explorer get the real file.
+                  e.preventDefault()
+                  window.api.startDrag([f.id])
+                }}
                 onDoubleClick={() => window.api.revealFile(f.id)}
                 title={f.path}
               >

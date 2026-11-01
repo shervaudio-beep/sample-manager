@@ -2,8 +2,22 @@ import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import path from 'node:path'
 import type { Worker } from 'node:worker_threads'
 import createScanWorker from './scan/worker?nodeWorker'
-import { addRoot, countFiles, getFile, libraryCounts, listRoots, openDb, queryFiles, removeRoot, type Db } from './db'
-import type { FileQuery, ScanEvent } from '../shared/types'
+import {
+  addRoot,
+  countFiles,
+  getFile,
+  getWaveform,
+  libraryCounts,
+  listRoots,
+  openDb,
+  queryFiles,
+  removeRoot,
+  saveWaveform,
+  type Db,
+  type Waveform
+} from './db'
+import { handleAudioProtocol, registerAudioScheme, startFileDrag } from './playback'
+import type { FileQuery, FileRow, ScanEvent } from '../shared/types'
 
 let db: Db
 let win: BrowserWindow | null = null
@@ -12,6 +26,8 @@ let queuedRoots = new Set<number>()
 
 // Lets test runs use a throwaway library instead of your real one.
 if (process.env.SAMPLE_MANAGER_DATA_DIR) app.setPath('userData', process.env.SAMPLE_MANAGER_DATA_DIR)
+
+registerAudioScheme()
 
 const dbPath = (): string => path.join(app.getPath('userData'), 'library.db')
 
@@ -82,6 +98,12 @@ function registerIpc(): void {
   ipcMain.handle('files:count', (_e, q: Partial<FileQuery>) => countFiles(db, q))
   ipcMain.handle('files:get', (_e, id: number) => getFile(db, id))
   ipcMain.handle('library:counts', () => libraryCounts(db))
+  ipcMain.handle('waveform:get', (_e, id: number) => getWaveform(db, id))
+  ipcMain.handle('waveform:save', (_e, id: number, wf: Waveform) => saveWaveform(db, id, wf))
+  ipcMain.on('drag:start', (e, ids: number[]) => {
+    const files = ids.map((id) => getFile(db, id)).filter((f): f is FileRow => f != null)
+    startFileDrag(e.sender, files)
+  })
   ipcMain.handle('files:reveal', (_e, id: number) => {
     const f = getFile(db, id)
     if (f) shell.showItemInFolder(f.path)
@@ -91,6 +113,7 @@ function registerIpc(): void {
 app.whenReady().then(() => {
   db = openDb(dbPath())
   registerIpc()
+  handleAudioProtocol((id) => getFile(db, id))
   createWindow()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
