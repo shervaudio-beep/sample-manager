@@ -23,6 +23,9 @@ interface Props {
   onRate: (row: FileRow, rating: number) => void
   onFavorite: (row: FileRow) => void
   emptyText: string
+  /** Start an OS drag of these files (to a DAW, Explorer/Finder or a collection). */
+  onDragFiles: (ids: number[]) => void
+  onContextMenu: (index: number, row: FileRow) => void
 }
 
 const COLUMNS: Array<{ field: SortField | null; label: string; className: string; title?: string }> = [
@@ -41,7 +44,7 @@ const COLUMNS: Array<{ field: SortField | null; label: string; className: string
 const ROW_HEIGHT = 30
 const isMac = navigator.platform.toLowerCase().includes('mac')
 
-export function FileTable({ list, sort, onSort, focus, selection, onRowClick, onRate, onFavorite, emptyText }: Props): React.JSX.Element {
+export function FileTable({ list, sort, onSort, focus, selection, onRowClick, onRate, onFavorite, emptyText, onDragFiles, onContextMenu }: Props): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null)
   const virtualizer = useVirtualizer({
     count: list.total,
@@ -98,7 +101,11 @@ export function FileTable({ list, sort, onSort, focus, selection, onRowClick, on
                   // Hand off to the OS drag so Ableton/Finder/Explorer get the real files.
                   // Dragging a selected row takes the whole selection with it.
                   e.preventDefault()
-                  window.api.startDrag(isSelected ? [...selection] : [f.id])
+                  onDragFiles(isSelected ? [...selection] : [f.id])
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  onContextMenu(vi.index, f)
                 }}
                 onDoubleClick={() => window.api.revealFile(f.id)}
                 title={f.path}

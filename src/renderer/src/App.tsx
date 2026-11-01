@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Category, DrumSubtype, FilePatch, FileRow, LibraryCounts, Root, ScanEvent, SortField, TagInfo } from '../../shared/types'
+import type { Category, Collection, DrumSubtype, FilePatch, FileRow, LibraryCounts, Root, ScanEvent, SortField, TagInfo } from '../../shared/types'
 import { CATEGORY_LABELS, SUBTYPE_LABELS } from '../../shared/types'
 import { FileTable, type ClickMods } from './FileTable'
 import { activeFilterCount, FilterBar, filtersToQuery, NO_FILTERS, SearchBox, type Filters } from './FilterBar'
@@ -22,6 +22,7 @@ export interface View {
   rootId?: number
   favorite?: boolean
   tagId?: number
+  collectionId?: number
 }
 
 const isMac = navigator.platform.toLowerCase().includes('mac')
@@ -30,6 +31,12 @@ export function App(): React.JSX.Element {
   const [roots, setRoots] = useState<Root[]>([])
   const [counts, setCounts] = useState<LibraryCounts | null>(null)
   const [tags, setTags] = useState<TagInfo[]>([])
+  const [collections, setCollections] = useState<Collection[]>([])
+  const [renamingId, setRenamingId] = useState<number | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const noticeTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  // Files being dragged out of the list, so a drop on a collection knows what it got.
+  const dragIds = useRef<number[] | null>(null)
   const [view, setView] = useState<View>({})
   const [sort, setSort] = useState<{ field: SortField; desc: boolean }>({ field: 'dateAdded', desc: true })
   const [filters, setFilters] = useState<Filters>(NO_FILTERS)
@@ -49,7 +56,30 @@ export function App(): React.JSX.Element {
     window.api.listRoots().then(setRoots)
     window.api.counts().then(setCounts)
     window.api.listTags().then(setTags)
+    window.api.listCollections().then(setCollections)
     setVersion((v) => v + 1)
+  }, [])
+
+  const flash = (text: string): void => {
+    setNotice(text)
+    clearTimeout(noticeTimer.current)
+    noticeTimer.current = setTimeout(() => setNotice(null), 3000)
+  }
+
+  // Changes made from the native file menu.
+  useEffect(
+    () =>
+      window.api.onLibraryChanged((d) => {
+        refreshLibrary()
+        if (d.renameCollectionId != null) setRenamingId(d.renameCollectionId)
+      }),
+    [refreshLibrary]
+  )
+
+  useEffect(() => {
+    const clear = (): void => void (dragIds.current = null)
+    window.addEventListener('mousedown', clear)
+    return () => window.removeEventListener('mousedown', clear)
   }, [])
 
   useEffect(() => {
@@ -101,6 +131,9 @@ export function App(): React.JSX.Element {
     rootId: view.rootId,
     favorite: view.favorite,
     tagId: view.tagId,
+    collectionId: view.collectionId,
+    // A collection shows its files even when they've gone missing, so you can see what's lost.
+    includeMissing: view.collectionId != null || undefined,
     ...filtersToQuery(filters, filters.search),
     sort: sort.field,
     desc: sort.desc
@@ -149,6 +182,41 @@ export function App(): React.JSX.Element {
     } else {
       selectOne(index, row)
     }
+  }
+
+  const changeView = (v: View): void => {
+    setView(v)
+    clearSelection()
+    if (v.collectionId != null) setSort({ field: 'position', desc: false })
+    else if (sort.field === 'position') setSort({ field: 'dateAdded', desc: true })
+  }
+
+  const dropFiles = async (collectionId: number | null, e: React.DragEvent): Promise<void> => {
+    const ids = dragIds.current
+    dragIds.current = null
+    const files = [...e.dataTransfer.files]
+    if (collectionId == null) {
+      if (!ids?.length && !files.length) return
+      const c = await window.api.createCollection('New Collection', ids ?? [])
+      if (!ids?.length) await window.api.addDroppedToCollection(c.id, files)
+      setRenamingId(c.id)
+      refreshLibrary()
+      return
+    }
+    const name = collections.find((c) => c.id === collectionId)?.name ?? 'collection'
+    let added: number
+    if (ids?.length) {
+      await window.api.addToCollection(collectionId, ids)
+      added = ids.length
+    } else {
+      added = await window.api.addDroppedToCollection(collectionId, files)
+    }
+    flash(
+      added
+        ? `Added ${added === 1 ? '1 file' : `${added} files`} to “${name}”`
+        : 'Only files already in your library can go in a collection. Add their folder first.'
+    )
+    refreshLibrary()
   }
 
   const edit = async (ids: number[], patch: FilePatch): Promise<void> => {
@@ -234,16 +302,35 @@ export function App(): React.JSX.Element {
         roots={roots}
         counts={counts}
         tags={tags}
+        collections={collections}
+        renamingId={renamingId}
         view={view}
         scan={scan}
-        onView={(v) => {
-          setView(v)
-          clearSelection()
+        onView={changeView}
+        onNewCollection={async () => {
+          const c = await window.api.createCollection('New Collection')
+          refreshLibrary()
+          setRenamingId(c.id)
         }}
+        onRenameStart={setRenamingId}
+        onRenameCollection={async (id, name) => {
+          await window.api.renameCollection(id, name)
+          refreshLibrary()
+        }}
+        onDeleteCollection={async (c) => {
+          const ok = window.confirm(
+            `Delete the collection “${c.name}”?\n\nOnly the list is deleted. The ${c.count === 1 ? 'file' : `${c.count} files`} in it stay in your library and on disk.`
+          )
+          if (!ok) return
+          await window.api.deleteCollection(c.id)
+          if (view.collectionId === c.id) changeView({})
+          refreshLibrary()
+        }}
+        onDropFiles={dropFiles}
         onAddFolders={() => window.api.addRoots().then(refreshLibrary)}
         onRemoveRoot={async (root) => {
           const ok = window.confirm(
-            `Remove "${root.path}" from the library?\n\nYour files on disk are NOT touched. Tags, ratings and notes for files in this folder will be forgotten.`
+            `Remove "${root.path}" from the library?\n\nYour files on disk are NOT touched. Tags, ratings, notes and collection entries for files in this folder will be forgotten.`
           )
           if (!ok) return
           await window.api.removeRoot(root.id)
@@ -255,11 +342,12 @@ export function App(): React.JSX.Element {
       />
       <main className="main">
         <div className="toolbar">
-          <div className="toolbar-title">{viewTitle(view, roots, tags)}</div>
+          <div className="toolbar-title">{viewTitle(view, roots, tags, collections)}</div>
           <div className="toolbar-count">
             {list.total.toLocaleString()} files
             {selection.size > 1 && <span className="toolbar-sel"> · {selection.size.toLocaleString()} selected</span>}
           </div>
+          {notice && <div className="toolbar-notice">{notice}</div>}
           {scan.running && (
             <div className="toolbar-scan">
               <span className="spinner" /> Scanning… {scan.processed.toLocaleString()} / {scan.found.toLocaleString()}
@@ -285,22 +373,37 @@ export function App(): React.JSX.Element {
           onRowClick={onRowClick}
           onRate={(row, rating) => edit(targetIds(row), { rating })}
           onFavorite={(row) => edit(targetIds(row), { favorite: !row.favorite })}
+          onDragFiles={(ids) => {
+            dragIds.current = ids
+            window.api.startDrag(ids)
+          }}
+          onContextMenu={(index, row) => {
+            let ids = [...selection]
+            if (!selection.has(row.id)) {
+              selectOne(index, row, false)
+              ids = [row.id]
+            }
+            window.api.showFileMenu(ids, { collectionId: view.collectionId })
+          }}
           emptyText={
-            filters.search || activeFilterCount(filters)
+            view.collectionId != null && !filters.search && !activeFilterCount(filters)
+              ? 'This collection is empty. Drag files onto it in the sidebar, or right-click files › Add to Collection.'
+              : filters.search || activeFilterCount(filters)
               ? 'No files match this search and these filters.'
               : 'No files here yet. Add a folder on the left to start indexing.'
           }
         />
       </main>
-      <Inspector ids={[...selection]} version={version} allTags={tags} onChanged={refreshLibrary} />
+      <Inspector ids={[...selection]} version={version} allTags={tags} allCollections={collections} onChanged={refreshLibrary} />
       <PlayerBar ref={player} version={version} />
     </div>
   )
 }
 
-function viewTitle(view: View, roots: Root[], tags: TagInfo[]): string {
+function viewTitle(view: View, roots: Root[], tags: TagInfo[], collections: Collection[]): string {
   if (view.rootId != null) return roots.find((r) => r.id === view.rootId)?.path ?? 'Folder'
   if (view.favorite) return 'Favorites'
+  if (view.collectionId != null) return collections.find((c) => c.id === view.collectionId)?.name ?? 'Collection'
   if (view.tagId != null) return '# ' + (tags.find((t) => t.id === view.tagId)?.name ?? 'Tag')
   if (view.subtype) return 'Drums › ' + SUBTYPE_LABELS[view.subtype]
   if (view.category) return CATEGORY_LABELS[view.category]

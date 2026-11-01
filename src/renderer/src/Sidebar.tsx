@@ -1,26 +1,55 @@
 import { CATEGORIES, CATEGORY_LABELS, DRUM_SUBTYPES, SUBTYPE_LABELS } from '../../shared/types'
-import type { LibraryCounts, Root, TagInfo } from '../../shared/types'
+import { useEffect, useRef, useState } from 'react'
+import type { Collection, LibraryCounts, Root, TagInfo } from '../../shared/types'
 import type { ScanState, View } from './App'
 
 interface Props {
   roots: Root[]
   counts: LibraryCounts | null
   tags: TagInfo[]
+  collections: Collection[]
+  /** Collection whose name is being edited inline (just created, or double-clicked). */
+  renamingId: number | null
   view: View
   scan: ScanState
   onView: (v: View) => void
   onAddFolders: () => void
   onRemoveRoot: (root: Root) => void
   onRescan: (rootIds?: number[]) => void
+  onNewCollection: () => void
+  onRenameStart: (id: number | null) => void
+  onRenameCollection: (id: number, name: string) => void
+  onDeleteCollection: (c: Collection) => void
+  /** Files dropped on a collection (`null` = on "new collection"). */
+  onDropFiles: (collectionId: number | null, e: React.DragEvent) => void
 }
 
-export function Sidebar({ roots, counts, tags, view, scan, onView, onAddFolders, onRemoveRoot, onRescan }: Props): React.JSX.Element {
+export function Sidebar(props: Props): React.JSX.Element {
+  const { roots, counts, tags, collections, renamingId, view, scan, onView, onAddFolders, onRemoveRoot, onRescan } = props
+  const [dropOver, setDropOver] = useState<number | 'new' | null>(null)
+
+  // Accept files dragged from the list (or from Explorer/Finder) onto a collection.
+  const dropProps = (target: number | 'new'): React.HTMLAttributes<HTMLElement> => ({
+    onDragOver: (e) => {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'link'
+      if (dropOver !== target) setDropOver(target)
+    },
+    onDragLeave: () => setDropOver((d) => (d === target ? null : d)),
+    onDrop: (e) => {
+      e.preventDefault()
+      setDropOver(null)
+      props.onDropFiles(target === 'new' ? null : target, e)
+    }
+  })
+
   const isActive = (v: View): boolean =>
     v.category === view.category &&
     v.subtype === view.subtype &&
     v.rootId === view.rootId &&
     v.favorite === view.favorite &&
-    v.tagId === view.tagId
+    v.tagId === view.tagId &&
+    v.collectionId === view.collectionId
 
   const item = (label: string, v: View, count?: number, indent = false): React.JSX.Element => (
     <button
@@ -51,6 +80,52 @@ export function Sidebar({ roots, counts, tags, view, scan, onView, onAddFolders,
           </div>
         ))}
         {item('♥  Favorites', { favorite: true }, counts?.favorites)}
+      </div>
+
+      <div className="side-section">
+        <div className={`side-heading${dropOver === 'new' ? ' drop-over' : ''}`} {...dropProps('new')}>
+          Collections
+          <button className="icon-btn" title="New collection (or drop files here)" onClick={props.onNewCollection}>
+            +
+          </button>
+        </div>
+        {collections.length === 0 && (
+          <div className={`side-empty small${dropOver === 'new' ? ' drop-over' : ''}`} {...dropProps('new')}>
+            Group files for a project or kit. Nothing is copied. Drop files here or right-click them.
+          </div>
+        )}
+        {collections.map((c) =>
+          renamingId === c.id ? (
+            <RenameBox
+              key={c.id}
+              name={c.name}
+              onDone={(name) => {
+                if (name != null) props.onRenameCollection(c.id, name)
+                props.onRenameStart(null)
+              }}
+            />
+          ) : (
+            <div
+              key={c.id}
+              className={`root-row coll-row${view.collectionId === c.id ? ' active' : ''}${dropOver === c.id ? ' drop-over' : ''}`}
+              {...dropProps(c.id)}
+            >
+              <button
+                className="root-main"
+                title="Double-click to rename"
+                onClick={() => onView({ collectionId: c.id })}
+                onDoubleClick={() => props.onRenameStart(c.id)}
+              >
+                <span className="coll-icon">▤</span>
+                <span className="side-label">{c.name}</span>
+                <span className="side-count">{c.count.toLocaleString()}</span>
+              </button>
+              <button className="icon-btn subtle" title="Delete collection (files are kept)" onClick={() => props.onDeleteCollection(c)}>
+                ×
+              </button>
+            </div>
+          )
+        )}
       </div>
 
       {tags.length > 0 && (
@@ -131,4 +206,31 @@ export function Sidebar({ roots, counts, tags, view, scan, onView, onAddFolders,
 function shortPath(p: string): string {
   const parts = p.split(/[\\/]/).filter(Boolean)
   return parts.length <= 2 ? p : '…/' + parts.slice(-2).join('/')
+}
+
+function RenameBox({ name, onDone }: { name: string; onDone: (name: string | null) => void }): React.JSX.Element {
+  const [text, setText] = useState(name)
+  const input = useRef<HTMLInputElement>(null)
+  const done = useRef(false)
+  const finish = (value: string | null): void => {
+    if (done.current) return
+    done.current = true
+    onDone(value)
+  }
+  useEffect(() => input.current?.select(), [])
+  return (
+    <input
+      ref={input}
+      autoFocus
+      className="input rename-input"
+      value={text}
+      maxLength={80}
+      onChange={(e) => setText(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') finish(text)
+        if (e.key === 'Escape') finish(null)
+      }}
+      onBlur={() => finish(text)}
+    />
+  )
 }

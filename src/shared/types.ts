@@ -107,7 +107,16 @@ export interface TagInfo {
   count: number
 }
 
-export type SortField = 'name' | 'category' | 'subtype' | 'bpm' | 'key' | 'duration' | 'size' | 'rating' | 'dateAdded'
+export interface Collection {
+  id: number
+  name: string
+  /** Files in the collection (or, from collectionsForFiles, how many of the asked-about files). */
+  count: number
+  createdAt: number
+}
+
+/** 'position' is the order files were added to a collection; only meaningful with collectionId. */
+export type SortField = 'name' | 'category' | 'subtype' | 'bpm' | 'key' | 'duration' | 'size' | 'rating' | 'dateAdded' | 'position'
 
 export interface FileQuery {
   category?: Category
@@ -115,6 +124,7 @@ export interface FileQuery {
   rootId?: number
   favorite?: boolean
   tagId?: number
+  collectionId?: number
   /** Words to find in name, folders, tags and notes. */
   search?: string
   bpmMin?: number

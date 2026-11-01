@@ -3,7 +3,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { CATEGORIES, CATEGORY_SHORT, DRUM_SUBTYPES, MUSICAL_KEYS, SUBTYPE_LABELS } from '../../shared/types'
-import type { DrumSubtype, FilePatch, FileRow, TagInfo, ValueSource } from '../../shared/types'
+import type { Collection, DrumSubtype, FilePatch, FileRow, TagInfo, ValueSource } from '../../shared/types'
 import { formatBpm, formatDate, formatDuration, formatSize, stripExt } from './format'
 import { Stars } from './Stars'
 
@@ -19,11 +19,12 @@ interface Props {
   ids: number[]
   version: number
   allTags: TagInfo[]
+  allCollections: Collection[]
   /** Called after any edit so the list, counts and tags refresh. */
   onChanged: () => void
 }
 
-export function Inspector({ ids, version, allTags, onChanged }: Props): React.JSX.Element {
+export function Inspector({ ids, version, allTags, allCollections, onChanged }: Props): React.JSX.Element {
   if (ids.length === 0) {
     return (
       <aside className="inspector">
@@ -34,15 +35,15 @@ export function Inspector({ ids, version, allTags, onChanged }: Props): React.JS
   return (
     <aside className="inspector">
       {ids.length === 1 ? (
-        <SingleFile id={ids[0]} version={version} allTags={allTags} onChanged={onChanged} />
+        <SingleFile id={ids[0]} version={version} allTags={allTags} allCollections={allCollections} onChanged={onChanged} />
       ) : (
-        <MultiFile ids={ids} version={version} allTags={allTags} onChanged={onChanged} />
+        <MultiFile ids={ids} version={version} allTags={allTags} allCollections={allCollections} onChanged={onChanged} />
       )}
     </aside>
   )
 }
 
-function SingleFile({ id, version, allTags, onChanged }: { id: number } & Omit<Props, 'ids'>): React.JSX.Element | null {
+function SingleFile({ id, version, allTags, allCollections, onChanged }: { id: number } & Omit<Props, 'ids'>): React.JSX.Element | null {
   const [file, setFile] = useState<FileRow | null>(null)
 
   useEffect(() => {
@@ -116,6 +117,11 @@ function SingleFile({ id, version, allTags, onChanged }: { id: number } & Omit<P
       </div>
 
       <div className="insp-group">
+        <div className="insp-label">Collections</div>
+        <CollectionEditor ids={[file.id]} version={version} allCollections={allCollections} onChanged={onChanged} />
+      </div>
+
+      <div className="insp-group">
         <div className="insp-label">Notes</div>
         <NotesEditor key={file.id} value={file.notes} onSave={(notes) => edit({ notes })} />
       </div>
@@ -136,7 +142,7 @@ function SingleFile({ id, version, allTags, onChanged }: { id: number } & Omit<P
   )
 }
 
-function MultiFile({ ids, version, allTags, onChanged }: Omit<Props, 'ids'> & { ids: number[] }): React.JSX.Element {
+function MultiFile({ ids, version, allTags, allCollections, onChanged }: Omit<Props, 'ids'> & { ids: number[] }): React.JSX.Element {
   const [tags, setTags] = useState<TagInfo[]>([])
   const idsKey = ids.join(',')
 
@@ -198,6 +204,11 @@ function MultiFile({ ids, version, allTags, onChanged }: Omit<Props, 'ids'> & { 
             onChanged()
           }}
         />
+      </div>
+
+      <div className="insp-group">
+        <div className="insp-label">Collections</div>
+        <CollectionEditor ids={ids} version={version} allCollections={allCollections} onChanged={onChanged} />
       </div>
     </>
   )
@@ -344,6 +355,75 @@ function NotesEditor({ value, onSave }: { value: string; onSave: (notes: string)
       }}
       onBlur={flush}
     />
+  )
+}
+
+/** Which collections the selection is in, with remove buttons and an "add to" picker. */
+function CollectionEditor({
+  ids,
+  version,
+  allCollections,
+  onChanged
+}: {
+  ids: number[]
+  version: number
+  allCollections: Collection[]
+  onChanged: () => void
+}): React.JSX.Element {
+  const [inside, setInside] = useState<Collection[]>([])
+  const idsKey = ids.join(',')
+
+  useEffect(() => {
+    let live = true
+    window.api.collectionsForFiles(ids).then((c) => live && setInside(c))
+    return () => {
+      live = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idsKey, version])
+
+  const full = new Set(inside.filter((c) => c.count === ids.length).map((c) => c.id))
+  const addable = allCollections.filter((c) => !full.has(c.id))
+
+  return (
+    <div className="tags">
+      {inside.map((c) => {
+        const partial = c.count < ids.length
+        return (
+          <span key={c.id} className={`chip coll${partial ? ' partial' : ''}`} title={partial ? `${c.count} of the selected files` : undefined}>
+            ▤ {c.name}
+            {partial && <span className="chip-count">{c.count}</span>}
+            <button
+              title="Remove from this collection (the file stays in your library)"
+              onClick={async () => {
+                await window.api.removeFromCollection(c.id, ids)
+                onChanged()
+              }}
+            >
+              ×
+            </button>
+          </span>
+        )
+      })}
+      <select
+        className="input"
+        value=""
+        onChange={async (e) => {
+          const v = e.target.value
+          if (v === 'new') await window.api.createCollection('New Collection', ids)
+          else if (v) await window.api.addToCollection(Number(v), ids)
+          onChanged()
+        }}
+      >
+        <option value="">Add to collection…</option>
+        {addable.map((c) => (
+          <option key={c.id} value={c.id}>
+            {c.name}
+          </option>
+        ))}
+        <option value="new">+ New collection</option>
+      </select>
+    </div>
   )
 }
 

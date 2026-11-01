@@ -1132,3 +1132,69 @@ select.input {
   justify-content: space-between;
   margin-top: 8px;
 }
+
+/* ---------- collections (milestone 5) ---------- */
+
+.coll-icon {
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.coll-row.active .coll-icon {
+  color: var(--accent);
+}
+
+.drop-over,
+.coll-row.drop-over .root-main {
+  background: var(--accent-dim);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  border-radius: 5px;
+  color: var(--text);
+}
+
+.side-empty.small {
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.rename-input {
+  margin: 1px 0;
+  padding: 4px 8px;
+  font-size: 13px;
+}
+
+.chip.coll {
+  color: var(--text);
+}
+
+.toolbar-notice {
+  font-size: 12px;
+  color: var(--accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  animation: notice-in 0.15s ease-out;
+}
+
+@keyframes notice-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+
+/* Keep the title and count readable; a long notice gives way instead. */
+.toolbar-title {
+  flex: 0 1 auto;
+  min-width: 60px;
+}
+
+.toolbar-count {
+  flex: none;
+  white-space: nowrap;
+}
+
+.toolbar-notice {
+  flex: 1 1 0;
+  min-width: 0;
+}

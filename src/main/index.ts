@@ -1,10 +1,18 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell } from 'electron'
 import path from 'node:path'
 import type { Worker } from 'node:worker_threads'
 import createScanWorker from './scan/worker?nodeWorker'
 import {
   addRoot,
   addTags,
+  addToCollection,
+  collectionsForFiles,
+  createCollection,
+  deleteCollection,
+  idsForPaths,
+  listCollections,
+  removeFromCollection,
+  renameCollection,
   countFiles,
   getFile,
   getWaveform,
@@ -60,6 +68,64 @@ function createWindow(): void {
 
 const send = (e: ScanEvent): void => win?.webContents.send('scan:event', e)
 
+/** Tell the UI the index changed outside its own calls (e.g. from the file menu). */
+const libraryChanged = (detail: { renameCollectionId?: number } = {}): void =>
+  win?.webContents.send('library:changed', detail)
+
+/** Right-click menu for files in the list. */
+function showFileMenu(sender: Electron.WebContents, ids: number[], ctx: { collectionId?: number }): void {
+  if (!ids.length) return
+  const n = ids.length
+  const collections = listCollections(db)
+  const current = collections.find((c) => c.id === ctx.collectionId)
+  const first = getFile(db, ids[0])
+  const template: Electron.MenuItemConstructorOptions[] = [
+    {
+      label: 'Add to Collection',
+      submenu: [
+        ...collections.map((c) => ({
+          label: c.name,
+          click: () => {
+            addToCollection(db, c.id, ids)
+            libraryChanged()
+          }
+        })),
+        ...(collections.length ? [{ type: 'separator' as const }] : []),
+        {
+          label: `New Collection with ${n === 1 ? 'This File' : `These ${n} Files`}`,
+          click: () => {
+            const c = createCollection(db, 'New Collection', ids)
+            libraryChanged({ renameCollectionId: c.id })
+          }
+        }
+      ]
+    }
+  ]
+  if (current) {
+    template.push({
+      label: `Remove from “${current.name}”`,
+      toolTip: 'Only removes it from this collection. The file stays in your library and on disk.',
+      click: () => {
+        removeFromCollection(db, current.id, ids)
+        libraryChanged()
+      }
+    })
+  }
+  template.push(
+    { type: 'separator' },
+    { label: process.platform === 'darwin' ? 'Reveal in Finder' : 'Show in Folder', enabled: !!first, click: () => first && shell.showItemInFolder(first.path) },
+    {
+      label: n === 1 ? 'Copy File Path' : `Copy ${n} File Paths`,
+      click: () => {
+        const paths = ids.map((id) => getFile(db, id)?.path).filter(Boolean)
+        clipboard.writeText(paths.join('\n'))
+      }
+    }
+  )
+  const owner = BrowserWindow.fromWebContents(sender)
+  Menu.buildFromTemplate(template).popup(owner ? { window: owner } : undefined)
+}
+
 function startScan(rootIds: number[]): void {
   if (scanWorker) {
     // One scan at a time; anything requested meanwhile runs right after.
@@ -105,6 +171,19 @@ function registerIpc(): void {
   ipcMain.handle('files:get', (_e, id: number) => getFile(db, id))
   ipcMain.handle('files:ids', (_e, q: Parameters<typeof queryIds>[1]) => queryIds(db, q))
   ipcMain.handle('files:update', (_e, ids: number[], patch: FilePatch) => updateFiles(db, ids, patch))
+  ipcMain.handle('collections:list', () => listCollections(db))
+  ipcMain.handle('collections:create', (_e, name: string, ids: number[] = []) => createCollection(db, name, ids))
+  ipcMain.handle('collections:rename', (_e, id: number, name: string) => renameCollection(db, id, name))
+  ipcMain.handle('collections:delete', (_e, id: number) => deleteCollection(db, id))
+  ipcMain.handle('collections:add', (_e, id: number, ids: number[]) => addToCollection(db, id, ids))
+  ipcMain.handle('collections:addPaths', (_e, id: number, paths: string[]) => {
+    const ids = idsForPaths(db, paths)
+    addToCollection(db, id, ids)
+    return ids.length
+  })
+  ipcMain.handle('collections:remove', (_e, id: number, ids: number[]) => removeFromCollection(db, id, ids))
+  ipcMain.handle('collections:forFiles', (_e, ids: number[]) => collectionsForFiles(db, ids))
+  ipcMain.on('menu:files', (e, ids: number[], ctx: { collectionId?: number }) => showFileMenu(e.sender, ids, ctx ?? {}))
   ipcMain.handle('tags:list', () => listTags(db))
   ipcMain.handle('tags:forFiles', (_e, ids: number[]) => tagsForFiles(db, ids))
   ipcMain.handle('tags:add', (_e, ids: number[], names: string[]) => addTags(db, ids, names))

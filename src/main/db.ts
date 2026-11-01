@@ -4,6 +4,7 @@
 import { DatabaseSync } from 'node:sqlite'
 import type {
   Category,
+  Collection,
   DrumSubtype,
   FilePatch,
   FileQuery,
@@ -206,13 +207,19 @@ const SORT_COLUMNS: Record<SortField, string> = {
   duration: 'duration_ms',
   size: 'size',
   rating: 'rating',
-  dateAdded: 'date_added'
+  dateAdded: 'date_added',
+  position: 'id' // handled in orderClause
 }
 
 type ListQuery = Omit<FileQuery, 'offset' | 'limit'>
 
 function orderClause(q: ListQuery): string {
   const dir = q.desc ? 'DESC' : 'ASC'
+  if (q.sort === 'position') {
+    // The order files were added to the collection. The id is an integer we validated, so it's inlined.
+    const cid = Number.isInteger(q.collectionId) ? q.collectionId : -1
+    return `ORDER BY (SELECT position FROM collection_items ci WHERE ci.collection_id = ${cid} AND ci.file_id = files.id) ${dir}, id ${dir}`
+  }
   // Rows without a value (no BPM yet, etc.) always sink to the bottom.
   const col = SORT_COLUMNS[q.sort] ?? SORT_COLUMNS.name
   const nullsLast = col.split(' ')[0]
@@ -264,6 +271,10 @@ function whereClause(q: Partial<FileQuery>): { sql: string; params: Array<string
   if (q.rootId != null) {
     conds.push('root_id = ?')
     params.push(q.rootId)
+  }
+  if (q.collectionId != null) {
+    conds.push('id IN (SELECT file_id FROM collection_items WHERE collection_id = ?)')
+    params.push(q.collectionId)
   }
   if (q.favorite) conds.push('favorite = 1')
   if (q.tagId != null) {
@@ -537,6 +548,86 @@ export function tagsForFiles(db: Db, ids: number[]): TagInfo[] {
        WHERE ft.file_id IN ${ID_LIST} GROUP BY t.id ORDER BY t.name COLLATE NOCASE`
     )
     .all(JSON.stringify(ids)) as unknown as TagInfo[]
+}
+
+// ---------- collections ----------
+// A collection is a list of links to library files: nothing is copied or moved on disk.
+
+const DEFAULT_COLLECTION_NAME = 'New Collection'
+
+export function normalizeCollectionName(raw: string): string {
+  const name = String(raw ?? '').replace(/\s+/g, ' ').trim().slice(0, 80)
+  return name || DEFAULT_COLLECTION_NAME
+}
+
+export function listCollections(db: Db): Collection[] {
+  return db
+    .prepare(
+      `SELECT c.id, c.name, c.created_at AS createdAt,
+              (SELECT COUNT(*) FROM collection_items ci WHERE ci.collection_id = c.id) AS count
+       FROM collections c ORDER BY c.name COLLATE NOCASE, c.id`
+    )
+    .all() as unknown as Collection[]
+}
+
+export function createCollection(db: Db, name: string, fileIds: number[] = []): Collection {
+  const { lastInsertRowid } = db
+    .prepare('INSERT INTO collections (name, created_at) VALUES (?, ?)')
+    .run(normalizeCollectionName(name), Date.now())
+  const id = Number(lastInsertRowid)
+  addToCollection(db, id, fileIds)
+  return listCollections(db).find((c) => c.id === id)!
+}
+
+export function renameCollection(db: Db, id: number, name: string): void {
+  db.prepare('UPDATE collections SET name = ? WHERE id = ?').run(normalizeCollectionName(name), id)
+}
+
+/** Deletes the list only; the files it pointed to stay in the library and on disk. */
+export function deleteCollection(db: Db, id: number): void {
+  db.prepare('DELETE FROM collections WHERE id = ?').run(id)
+}
+
+/** Appends files in the given order; files already in the collection keep their place. */
+export function addToCollection(db: Db, collectionId: number, fileIds: number[]): void {
+  if (!fileIds.length) return
+  transaction(db, () => {
+    const { next } = db
+      .prepare('SELECT coalesce(max(position), 0) + 1 AS next FROM collection_items WHERE collection_id = ?')
+      .get(collectionId) as { next: number }
+    db.prepare(
+      `INSERT OR IGNORE INTO collection_items (collection_id, file_id, position)
+       SELECT ?, j.value, ? + j.key FROM json_each(?) j
+       WHERE j.value IN (SELECT id FROM files) AND EXISTS (SELECT 1 FROM collections WHERE id = ?)`
+    ).run(collectionId, next, JSON.stringify(fileIds), collectionId)
+  })
+}
+
+export function removeFromCollection(db: Db, collectionId: number, fileIds: number[]): void {
+  db.prepare(`DELETE FROM collection_items WHERE collection_id = ? AND file_id IN ${ID_LIST}`).run(
+    collectionId,
+    JSON.stringify(fileIds)
+  )
+}
+
+/** Collections holding any of these files, with how many of them each holds. */
+export function collectionsForFiles(db: Db, fileIds: number[]): Collection[] {
+  return db
+    .prepare(
+      `SELECT c.id, c.name, c.created_at AS createdAt, COUNT(*) AS count
+       FROM collection_items ci JOIN collections c ON c.id = ci.collection_id
+       WHERE ci.file_id IN ${ID_LIST} GROUP BY c.id ORDER BY c.name COLLATE NOCASE`
+    )
+    .all(JSON.stringify(fileIds)) as unknown as Collection[]
+}
+
+/** Library ids for absolute paths (files dropped from Explorer/Finder); unknown paths are skipped. */
+export function idsForPaths(db: Db, paths: string[]): number[] {
+  const rows = db
+    .prepare(`SELECT id, path FROM files WHERE path IN (SELECT value FROM json_each(?))`)
+    .all(JSON.stringify(paths)) as Array<{ id: number; path: string }>
+  const byPath = new Map(rows.map((r) => [r.path, r.id]))
+  return paths.map((p) => byPath.get(p)).filter((id): id is number => id != null)
 }
 
 // ---------- waveforms ----------
