@@ -5,13 +5,15 @@ import { DatabaseSync } from 'node:sqlite'
 import type {
   Category,
   DrumSubtype,
+  FilePatch,
   FileQuery,
   FileRow,
   LibraryCounts,
   Root,
-  SortField
+  SortField,
+  TagInfo
 } from '../shared/types'
-import { CATEGORIES, DRUM_SUBTYPES } from '../shared/types'
+import { CATEGORIES, DRUM_SUBTYPES, MUSICAL_KEYS } from '../shared/types'
 
 export type Db = DatabaseSync
 
@@ -166,8 +168,22 @@ const SORT_COLUMNS: Record<SortField, string> = {
   key: 'musical_key',
   duration: 'duration_ms',
   size: 'size',
+  rating: 'rating',
   dateAdded: 'date_added'
 }
+
+type ListQuery = Omit<FileQuery, 'offset' | 'limit'>
+
+function orderClause(q: ListQuery): string {
+  const dir = q.desc ? 'DESC' : 'ASC'
+  // Rows without a value (no BPM yet, etc.) always sink to the bottom.
+  const col = SORT_COLUMNS[q.sort] ?? SORT_COLUMNS.name
+  const nullsLast = col.split(' ')[0]
+  return `ORDER BY ${nullsLast} IS NULL, ${col} ${dir}, id ${dir}`
+}
+
+/** Bind a list of ids as one parameter, so a 50k-file selection doesn't hit SQLite's variable limit. */
+const ID_LIST = '(SELECT value FROM json_each(?))'
 
 function whereClause(q: Partial<FileQuery>): { sql: string; params: Array<string | number> } {
   const conds: string[] = []
@@ -185,6 +201,11 @@ function whereClause(q: Partial<FileQuery>): { sql: string; params: Array<string
     conds.push('root_id = ?')
     params.push(q.rootId)
   }
+  if (q.favorite) conds.push('favorite = 1')
+  if (q.tagId != null) {
+    conds.push('id IN (SELECT file_id FROM file_tags WHERE tag_id = ?)')
+    params.push(q.tagId)
+  }
   return { sql: conds.length ? 'WHERE ' + conds.join(' AND ') : '', params }
 }
 
@@ -199,6 +220,7 @@ interface FileDbRow {
   category: Category
   category_source: FileRow['categorySource']
   subtype: DrumSubtype | null
+  subtype_source: FileRow['subtypeSource']
   bpm: number | null
   bpm_source: FileRow['bpmSource']
   musical_key: string | null
@@ -210,8 +232,15 @@ interface FileDbRow {
   rating: number
   favorite: number
   notes: string
+  tag_list: string | null
   date_added: number
 }
+
+// Tag names joined with a unit separator, which can't appear in a tag name.
+const SELECT_FILES = `SELECT files.*,
+  (SELECT group_concat(t.name, char(31)) FROM file_tags ft JOIN tags t ON t.id = ft.tag_id
+   WHERE ft.file_id = files.id) AS tag_list
+  FROM files`
 
 function toFileRow(r: FileDbRow): FileRow {
   return {
@@ -225,6 +254,7 @@ function toFileRow(r: FileDbRow): FileRow {
     category: r.category,
     categorySource: r.category_source,
     subtype: r.subtype,
+    subtypeSource: r.subtype_source,
     bpm: r.bpm,
     bpmSource: r.bpm_source,
     key: r.musical_key,
@@ -236,24 +266,26 @@ function toFileRow(r: FileDbRow): FileRow {
     rating: r.rating,
     favorite: r.favorite === 1,
     notes: r.notes,
+    tags: r.tag_list ? r.tag_list.split('\x1f').sort((a, b) => a.localeCompare(b)) : [],
     dateAdded: r.date_added
   }
 }
 
 export function queryFiles(db: Db, q: FileQuery): FileRow[] {
   const { sql, params } = whereClause(q)
-  const dir = q.desc ? 'DESC' : 'ASC'
-  // Rows without a value (no BPM yet, etc.) always sink to the bottom.
-  const col = SORT_COLUMNS[q.sort] ?? SORT_COLUMNS.name
-  const nullsLast = col.split(' ')[0]
   const rows = db
-    .prepare(
-      `SELECT * FROM files ${sql}
-       ORDER BY ${nullsLast} IS NULL, ${col} ${dir}, id ${dir}
-       LIMIT ? OFFSET ?`
-    )
+    .prepare(`${SELECT_FILES} ${sql} ${orderClause(q)} LIMIT ? OFFSET ?`)
     .all(...params, q.limit, q.offset) as unknown as FileDbRow[]
   return rows.map(toFileRow)
+}
+
+/** Ids in list order, for shift-click ranges and select-all. */
+export function queryIds(db: Db, q: ListQuery & { offset?: number; limit?: number }): number[] {
+  const { sql, params } = whereClause(q)
+  const rows = db
+    .prepare(`SELECT id FROM files ${sql} ${orderClause(q)} LIMIT ? OFFSET ?`)
+    .all(...params, q.limit ?? -1, q.offset ?? 0) as Array<{ id: number }>
+  return rows.map((r) => r.id)
 }
 
 export function countFiles(db: Db, q: Partial<FileQuery>): number {
@@ -263,7 +295,7 @@ export function countFiles(db: Db, q: Partial<FileQuery>): number {
 }
 
 export function getFile(db: Db, id: number): FileRow | null {
-  const r = db.prepare('SELECT * FROM files WHERE id = ?').get(id) as unknown as FileDbRow | undefined
+  const r = db.prepare(`${SELECT_FILES} WHERE id = ?`).get(id) as unknown as FileDbRow | undefined
   return r ? toFileRow(r) : null
 }
 
@@ -279,8 +311,122 @@ export function libraryCounts(db: Db): LibraryCounts {
     byCategory[r.category] = (byCategory[r.category] ?? 0) + r.n
     if (r.subtype) bySubtype[r.subtype] = (bySubtype[r.subtype] ?? 0) + r.n
   }
-  const { n: missing } = db.prepare(`SELECT COUNT(*) AS n FROM files WHERE status = 'missing'`).get() as { n: number }
-  return { total, missing, byCategory, bySubtype }
+  const { missing, favorites } = db
+    .prepare(
+      `SELECT COUNT(*) FILTER (WHERE status = 'missing') AS missing,
+              COUNT(*) FILTER (WHERE status != 'missing' AND favorite = 1) AS favorites
+       FROM files`
+    )
+    .get() as { missing: number; favorites: number }
+  return { total, missing, favorites, byCategory, bySubtype }
+}
+
+// ---------- edits ----------
+// Only the index changes here; audio files on disk are never written.
+
+function transaction(db: Db, fn: () => void): void {
+  db.exec('BEGIN')
+  try {
+    fn()
+    db.exec('COMMIT')
+  } catch (err) {
+    db.exec('ROLLBACK')
+    throw err
+  }
+}
+
+/** Throws on anything the renderer shouldn't be able to store. */
+function checkPatch(p: FilePatch): void {
+  if (p.category !== undefined && !CATEGORIES.includes(p.category)) throw new Error(`Unknown category: ${p.category}`)
+  if (p.subtype != null && !DRUM_SUBTYPES.includes(p.subtype)) throw new Error(`Unknown drum type: ${p.subtype}`)
+  if (p.bpm != null && !(Number.isFinite(p.bpm) && p.bpm >= 20 && p.bpm <= 999)) throw new Error('BPM must be between 20 and 999')
+  if (p.key != null && !MUSICAL_KEYS.includes(p.key)) throw new Error(`Unknown key: ${p.key}`)
+  if (p.rating !== undefined && !(Number.isInteger(p.rating) && p.rating >= 0 && p.rating <= 5)) throw new Error('Rating must be 0-5')
+  if (p.notes !== undefined && (typeof p.notes !== 'string' || p.notes.length > 20_000)) throw new Error('Notes too long')
+}
+
+export function updateFiles(db: Db, ids: number[], patch: FilePatch): void {
+  checkPatch(patch)
+  const sets: string[] = []
+  const params: Array<string | number | null> = []
+  const set = (sql: string, ...values: Array<string | number | null>): void => {
+    sets.push(sql)
+    params.push(...values)
+  }
+
+  // A drum type implies the Drum category; any other category has no drum type.
+  let { category, subtype } = patch
+  if (subtype != null) category = 'drum'
+  if (category !== undefined && category !== 'drum') subtype = null
+
+  if (category !== undefined) set(`category = ?, category_source = 'manual', category_conf = NULL`, category)
+  if (subtype !== undefined) set(`subtype = ?, subtype_source = 'manual'`, subtype)
+  // Clearing a value is also manual: it stops a rescan from putting the wrong guess back.
+  if (patch.bpm !== undefined) set(`bpm = ?, bpm_source = 'manual'`, patch.bpm == null ? null : Math.round(patch.bpm * 100) / 100)
+  if (patch.key !== undefined) set(`musical_key = ?, key_source = 'manual'`, patch.key)
+  if (patch.rating !== undefined) set('rating = ?', patch.rating)
+  if (patch.favorite !== undefined) set('favorite = ?', patch.favorite ? 1 : 0)
+  if (patch.notes !== undefined) set('notes = ?', patch.notes)
+  if (!sets.length || !ids.length) return
+
+  db.prepare(`UPDATE files SET ${sets.join(', ')} WHERE id IN ${ID_LIST}`).run(...params, JSON.stringify(ids))
+}
+
+// ---------- tags ----------
+
+/** Trim and collapse whitespace; null for an empty or over-long name. */
+export function normalizeTagName(raw: string): string | null {
+  const name = raw.replace(/[\s\x1f]+/g, ' ').trim()
+  return name && name.length <= 40 ? name : null
+}
+
+export function addTags(db: Db, ids: number[], names: string[]): void {
+  const clean = [...new Set(names.map(normalizeTagName).filter((n): n is string => n != null))]
+  if (!clean.length || !ids.length) return
+  const createTag = db.prepare('INSERT OR IGNORE INTO tags (name) VALUES (?)')
+  const tagFiles = db.prepare(
+    `INSERT OR IGNORE INTO file_tags (file_id, tag_id)
+     SELECT f.id, t.id FROM files f, tags t WHERE f.id IN ${ID_LIST} AND t.name = ?`
+  )
+  transaction(db, () => {
+    for (const name of clean) {
+      createTag.run(name)
+      tagFiles.run(JSON.stringify(ids), name)
+    }
+  })
+}
+
+export function removeTags(db: Db, ids: number[], names: string[]): void {
+  if (!names.length || !ids.length) return
+  const untag = db.prepare(
+    `DELETE FROM file_tags WHERE file_id IN ${ID_LIST} AND tag_id = (SELECT id FROM tags WHERE name = ?)`
+  )
+  transaction(db, () => {
+    for (const name of names) untag.run(JSON.stringify(ids), name)
+    db.exec('DELETE FROM tags WHERE id NOT IN (SELECT tag_id FROM file_tags)')
+  })
+}
+
+/** Tags in use, with how many (present) files carry each. */
+export function listTags(db: Db): TagInfo[] {
+  return db
+    .prepare(
+      `SELECT t.id, t.name, COUNT(*) AS count FROM tags t
+       JOIN file_tags ft ON ft.tag_id = t.id JOIN files f ON f.id = ft.file_id
+       WHERE f.status != 'missing'
+       GROUP BY t.id ORDER BY t.name COLLATE NOCASE`
+    )
+    .all() as unknown as TagInfo[]
+}
+
+/** Tags across a selection, with how many of the selected files have each. */
+export function tagsForFiles(db: Db, ids: number[]): TagInfo[] {
+  return db
+    .prepare(
+      `SELECT t.id, t.name, COUNT(*) AS count FROM file_tags ft JOIN tags t ON t.id = ft.tag_id
+       WHERE ft.file_id IN ${ID_LIST} GROUP BY t.id ORDER BY t.name COLLATE NOCASE`
+    )
+    .all(JSON.stringify(ids)) as unknown as TagInfo[]
 }
 
 // ---------- waveforms ----------

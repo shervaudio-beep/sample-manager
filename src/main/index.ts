@@ -4,20 +4,26 @@ import type { Worker } from 'node:worker_threads'
 import createScanWorker from './scan/worker?nodeWorker'
 import {
   addRoot,
+  addTags,
   countFiles,
   getFile,
   getWaveform,
   libraryCounts,
   listRoots,
+  listTags,
   openDb,
   queryFiles,
+  queryIds,
   removeRoot,
+  removeTags,
   saveWaveform,
+  tagsForFiles,
+  updateFiles,
   type Db,
   type Waveform
 } from './db'
 import { handleAudioProtocol, registerAudioScheme, startFileDrag } from './playback'
-import type { FileQuery, FileRow, ScanEvent } from '../shared/types'
+import type { FilePatch, FileQuery, FileRow, ScanEvent } from '../shared/types'
 
 let db: Db
 let win: BrowserWindow | null = null
@@ -97,6 +103,12 @@ function registerIpc(): void {
   ipcMain.handle('files:query', (_e, q: FileQuery) => queryFiles(db, q))
   ipcMain.handle('files:count', (_e, q: Partial<FileQuery>) => countFiles(db, q))
   ipcMain.handle('files:get', (_e, id: number) => getFile(db, id))
+  ipcMain.handle('files:ids', (_e, q: Parameters<typeof queryIds>[1]) => queryIds(db, q))
+  ipcMain.handle('files:update', (_e, ids: number[], patch: FilePatch) => updateFiles(db, ids, patch))
+  ipcMain.handle('tags:list', () => listTags(db))
+  ipcMain.handle('tags:forFiles', (_e, ids: number[]) => tagsForFiles(db, ids))
+  ipcMain.handle('tags:add', (_e, ids: number[], names: string[]) => addTags(db, ids, names))
+  ipcMain.handle('tags:remove', (_e, ids: number[], names: string[]) => removeTags(db, ids, names))
   ipcMain.handle('library:counts', () => libraryCounts(db))
   ipcMain.handle('waveform:get', (_e, id: number) => getWaveform(db, id))
   ipcMain.handle('waveform:save', (_e, id: number, wf: Waveform) => saveWaveform(db, id, wf))

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { FileQuery, FileRow, LibraryCounts, Root, ScanEvent } from '../shared/types'
+import type { FilePatch, FileQuery, FileRow, LibraryCounts, Root, ScanEvent, TagInfo } from '../shared/types'
 import type { Waveform } from '../main/db'
 
 const api = {
@@ -11,6 +11,13 @@ const api = {
   queryFiles: (q: FileQuery): Promise<FileRow[]> => ipcRenderer.invoke('files:query', q),
   countFiles: (q: Partial<FileQuery>): Promise<number> => ipcRenderer.invoke('files:count', q),
   getFile: (id: number): Promise<FileRow | null> => ipcRenderer.invoke('files:get', id),
+  queryIds: (q: Omit<FileQuery, 'offset' | 'limit'> & { offset?: number; limit?: number }): Promise<number[]> =>
+    ipcRenderer.invoke('files:ids', q),
+  updateFiles: (ids: number[], patch: FilePatch): Promise<void> => ipcRenderer.invoke('files:update', ids, patch),
+  listTags: (): Promise<TagInfo[]> => ipcRenderer.invoke('tags:list'),
+  tagsForFiles: (ids: number[]): Promise<TagInfo[]> => ipcRenderer.invoke('tags:forFiles', ids),
+  addTags: (ids: number[], names: string[]): Promise<void> => ipcRenderer.invoke('tags:add', ids, names),
+  removeTags: (ids: number[], names: string[]): Promise<void> => ipcRenderer.invoke('tags:remove', ids, names),
   counts: (): Promise<LibraryCounts> => ipcRenderer.invoke('library:counts'),
   revealFile: (id: number): Promise<void> => ipcRenderer.invoke('files:reveal', id),
   getWaveform: (id: number): Promise<Waveform | null> => ipcRenderer.invoke('waveform:get', id),

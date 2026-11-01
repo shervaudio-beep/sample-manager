@@ -45,7 +45,10 @@ export const SUBTYPE_LABELS: Record<DrumSubtype, string> = {
   fill: 'Fill'
 }
 
-export const AUDIO_EXTENSIONS = ['.wav', '.mp3', '.aif', '.aiff', '.flac', '.ogg', '.m4a'] as const
+/** Every key the app stores, in canonical form: sharps only, "m" for minor. */
+export const MUSICAL_KEYS = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'].flatMap((n) => [n, n + 'm'])
+
+export const AUDIO_EXTENSIONS =['.wav', '.mp3', '.aif', '.aiff', '.flac', '.ogg', '.m4a'] as const
 
 /** Where a value came from. 'manual' values are never overwritten by a rescan. */
 export type ValueSource = 'auto' | 'filename' | 'tag' | 'analysis' | 'manual'
@@ -71,6 +74,7 @@ export interface FileRow {
   category: Category
   categorySource: ValueSource
   subtype: DrumSubtype | null
+  subtypeSource: ValueSource
   bpm: number | null
   bpmSource: ValueSource | null
   key: string | null
@@ -82,15 +86,35 @@ export interface FileRow {
   rating: number
   favorite: boolean
   notes: string
+  tags: string[]
   dateAdded: number
 }
 
-export type SortField = 'name' | 'category' | 'subtype' | 'bpm' | 'key' | 'duration' | 'size' | 'dateAdded'
+/** A user edit to one or more files. Category, type, BPM and key become 'manual' and survive rescans. */
+export interface FilePatch {
+  category?: Category
+  subtype?: DrumSubtype | null
+  bpm?: number | null
+  key?: string | null
+  rating?: number
+  favorite?: boolean
+  notes?: string
+}
+
+export interface TagInfo {
+  id: number
+  name: string
+  count: number
+}
+
+export type SortField = 'name' | 'category' | 'subtype' | 'bpm' | 'key' | 'duration' | 'size' | 'rating' | 'dateAdded'
 
 export interface FileQuery {
   category?: Category
   subtype?: DrumSubtype
   rootId?: number
+  favorite?: boolean
+  tagId?: number
   includeMissing?: boolean
   sort: SortField
   desc: boolean
@@ -101,6 +125,7 @@ export interface FileQuery {
 export interface LibraryCounts {
   total: number
   missing: number
+  favorites: number
   byCategory: Record<Category, number>
   bySubtype: Record<DrumSubtype, number>
 }

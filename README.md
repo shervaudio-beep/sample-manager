@@ -37,7 +37,7 @@ Set `SAMPLE_MANAGER_DATA_DIR` to use a different (e.g. throwaway) library.
 
 1. **Scanning + list view** ✅
 2. **Preview player, waveform, keyboard navigation, drag to DAW** ✅
-3. Categories, sub-types, tags, rating, favorites, notes (editing)
+3. **Editing: category, drum type, BPM, key, tags, rating, favorites, notes; multi-select** ✅
 4. Search and filters
 5. Collections
 6. Duplicates
@@ -47,11 +47,21 @@ Set `SAMPLE_MANAGER_DATA_DIR` to use a different (e.g. throwaway) library.
 | Key | Action |
 |---|---|
 | Click | Select and preview |
+| Ctrl-click (⌘-click on Mac) | Add / remove a file from the selection |
+| Shift-click, Shift+↑/↓ | Select a range |
+| Ctrl+A (⌘A) | Select everything in the current list |
 | Space | Play / stop |
 | ↑ / ↓ | Previous / next file, auto-preview |
+| 1–5, 0 | Rate the selection, clear rating |
+| F | Favorite / unfavorite the selection |
 | Esc | Stop |
 
 Drag any row into Ableton (or Finder/Explorer) to use the original file; nothing is copied.
+Dragging a selected row drags the whole selection.
+
+Edits (category, type, BPM, key, tags, rating, favorites, notes) only change the library
+index, never the audio files. Category, type, BPM and key you set are marked *manual* and a
+rescan never overwrites them, even if the file changes on disk.
 SYNC time-stretches files that have a BPM to the project tempo, keeping pitch.
 
 ## Building for macOS

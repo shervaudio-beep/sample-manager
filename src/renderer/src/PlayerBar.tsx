@@ -25,7 +25,7 @@ function formatClock(sec: number): string {
   return `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`
 }
 
-export const PlayerBar = forwardRef<PlayerHandle>(function PlayerBar(_props, ref) {
+export const PlayerBar = forwardRef<PlayerHandle, { version: number }>(function PlayerBar({ version }, ref) {
   const waveRef = useRef<HTMLDivElement>(null)
   const ws = useRef<WaveSurfer | null>(null)
   const loadSeq = useRef(0)
@@ -40,6 +40,13 @@ export const PlayerBar = forwardRef<PlayerHandle>(function PlayerBar(_props, ref
   const [projectBpm, setProjectBpm] = useState(() => loadSetting('projectBpm', 140))
 
   const rate = sync && file ? syncRate(file.bpm, projectBpm) : 1
+
+  // The library changed (e.g. its BPM was edited): refresh what's shown without reloading audio.
+  const fileId = file?.id
+  useEffect(() => {
+    if (fileId == null) return
+    window.api.getFile(fileId).then((f) => f && setFile((cur) => (cur?.id === f.id ? f : cur)))
+  }, [version, fileId])
 
   useEffect(() => {
     const media = new Audio()
