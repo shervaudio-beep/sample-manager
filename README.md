@@ -91,7 +91,26 @@ index, never the audio files. Category, type, BPM and key you set are marked *ma
 rescan never overwrites them, even if the file changes on disk.
 SYNC time-stretches files that have a BPM to the project tempo, keeping pitch.
 
-## Building for macOS
+## Building the app
 
-The app has no native modules, so the same code runs on macOS. Packaging a `.dmg`
-(electron-builder, added in a later milestone) has to run on a Mac or a macOS CI runner.
+```bash
+npm run dist:mac   # on a Mac: dist/Sample-Manager-<version>-arm64.dmg and -x64.dmg
+npm run dist:win   # on Windows: dist/Sample-Manager-Setup-<version>.exe
+npm run pack       # unpacked app in dist/ for a quick check, any platform
+```
+
+Without a Mac, use GitHub Actions: push this repo to GitHub, open **Actions › Build macOS app ›
+Run workflow**, and download the `.dmg` files from the finished run's **Artifacts**. Pushing a
+tag like `v0.2.0` also publishes them as a GitHub release. See `.github/workflows/build-mac.yml`.
+
+**Opening it on a Mac.** Without an Apple Developer ID ($99/year) the app is signed ad hoc, so
+macOS warns the first time: "Apple could not verify Sample Manager is free of malware". Open it
+once via **System Settings › Privacy & Security › Open Anyway** (or right-click the app › Open
+on older macOS). After that it opens normally. With a Developer ID, add the secrets listed at
+the top of the workflow and it will be signed and notarized, with no warning.
+
+Pick the `arm64` .dmg for Apple Silicon (M1 and later) and `x64` for Intel Macs.
+
+The library is stored in the same place whether you run from source or the installed app
+(`sample-manager` in the user data folder above), so switching keeps your tags, ratings and
+collections. The app icon is drawn by `scripts/make-icon.mjs` (`npm run icon`).

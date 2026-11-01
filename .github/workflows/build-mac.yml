@@ -1,0 +1,68 @@
+# Builds the macOS app on GitHub's Mac runners (packaging a .dmg needs macOS).
+# Run it from the Actions tab ("Run workflow"), or push a tag like v0.2.0 to also publish a release.
+# Download the .dmg files from the run's "Artifacts" section.
+#
+# Optional, for an app that opens without warnings (needs an Apple Developer account):
+#   MAC_CERTIFICATE           base64 of a "Developer ID Application" .p12
+#   MAC_CERTIFICATE_PASSWORD  its password
+#   APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID   for notarization
+# Without them the app is signed ad hoc: it works, but macOS asks you to confirm the first open.
+
+name: Build macOS app
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Check and test
+        run: |
+          npm run typecheck
+          npm test
+
+      - name: Build app
+        run: npx electron-vite build
+
+      - name: Package (.dmg for Apple Silicon and Intel)
+        env:
+          CSC_LINK: ${{ secrets.MAC_CERTIFICATE }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$CSC_LINK" ]; then
+            echo "Signing with Developer ID and notarizing"
+            npx electron-builder --mac -c.mac.notarize=true
+          else
+            echo "No signing certificate: signing ad hoc"
+            CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac -c.mac.identity=- -c.mac.hardenedRuntime=false
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Sample-Manager-macOS
+          path: dist/*.dmg
+          if-no-files-found: error
+
+      - name: Publish release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/*.dmg --title "Sample Manager $GITHUB_REF_NAME" --generate-notes

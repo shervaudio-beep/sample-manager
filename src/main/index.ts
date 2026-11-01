@@ -49,8 +49,10 @@ let dupeWorker: Worker | null = null
 let analyzer: AudioAnalyzer
 let dupeAgain = false
 
-// Lets test runs use a throwaway library instead of your real one.
-if (process.env.SAMPLE_MANAGER_DATA_DIR) app.setPath('userData', process.env.SAMPLE_MANAGER_DATA_DIR)
+// One library folder whether run from source or installed: a packaged app would otherwise be
+// named "Sample Manager" and look in a different folder. Test runs can point elsewhere.
+app.setName('Sample Manager')
+app.setPath('userData', process.env.SAMPLE_MANAGER_DATA_DIR ?? path.join(app.getPath('appData'), 'sample-manager'))
 
 registerAudioScheme()
 

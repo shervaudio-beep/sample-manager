@@ -11,25 +11,34 @@
     "start": "electron-vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "icon": "node scripts/make-icon.mjs",
+    "pack": "electron-vite build && electron-builder --dir",
+    "dist:mac": "electron-vite build && electron-builder --mac",
+    "dist:win": "electron-vite build && electron-builder --win"
   },
   "dependencies": {
-    "@tanstack/react-virtual": "^3.14.24",
-    "music-metadata": "^12.3.3",
-    "react": "^19.3.1",
-    "react-dom": "^19.3.1",
-    "wavesurfer.js": "^8.0.4"
+    "music-metadata": "^12.3.3"
   },
   "devDependencies": {
+    "@tanstack/react-virtual": "^3.14.24",
     "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
     "electron": "^45.2.1",
+    "electron-builder": "^26.18.0",
     "electron-vite": "^6.0.0",
     "playwright-core": "^1.64.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
-    "vitest": "^5.0.5"
-  }
+    "vitest": "^5.0.5",
+    "wavesurfer.js": "^8.0.4"
+  },
+  "allowScripts": {
+    "electron-winstaller": false
+  },
+  "author": "Sherv"
 }

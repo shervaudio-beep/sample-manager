@@ -1,0 +1,44 @@
+# Packaging: `npm run dist:mac` (on a Mac or the GitHub Actions workflow) or `npm run dist:win`.
+appId: com.sherv.samplemanager
+productName: Sample Manager
+copyright: Copyright © 2026 Sherv
+
+directories:
+  buildResources: build
+  output: dist
+
+files:
+  - out/**
+  - package.json
+
+# No native modules (SQLite is built into Electron), so nothing to rebuild per platform.
+npmRebuild: false
+publish: null
+
+mac:
+  category: public.app-category.music
+  icon: build/icon.png
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+  # Without an Apple Developer ID the workflow signs ad hoc (identity "-"), which Apple Silicon
+  # requires for the app to start at all. With signing secrets set, it signs and notarizes.
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  extendInfo:
+    NSMicrophoneUsageDescription: Not used. Sample Manager only plays audio files.
+
+dmg:
+  title: Sample Manager ${version}
+  artifactName: Sample-Manager-${version}-${arch}.dmg
+
+win:
+  icon: build/icon.png
+  target:
+    - target: nsis
+      arch: [x64]
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  artifactName: Sample-Manager-Setup-${version}.exe
