@@ -55,10 +55,13 @@ jobs:
         run: |
           if [ -n "$CSC_LINK" ]; then
             echo "Signing with Developer ID and notarizing"
-            npx electron-builder --mac -c.mac.notarize=true
+            npx electron-builder --mac --publish never -c.mac.notarize=true
           else
             echo "No signing certificate: signing ad hoc"
-            CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac -c.mac.identity=- -c.mac.hardenedRuntime=false
+            # Unset secrets arrive as empty strings, which electron-builder would read as a
+            # certificate path; remove them entirely.
+            unset CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
+            CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac --publish never -c.mac.identity=- -c.mac.hardenedRuntime=false
           fi
 
       - uses: actions/upload-artifact@v4
