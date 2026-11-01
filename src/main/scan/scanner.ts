@@ -209,6 +209,7 @@ export async function scanRoot(db: Db, rootId: number, opts: ScanOptions = {}): 
     UPDATE files SET size = ?, mtime_ms = ?, status = 'ok', last_seen_scan = ?, scan_error = ?,
       duration_ms = ?, sample_rate = ?, bit_depth = ?, channels = ?,
       audio_hash = NULL, audio_qhash = NULL, audio_offset = NULL, audio_len = NULL,
+      analyzed_v = NULL, analysis_bpm = NULL, analysis_bpm_conf = NULL, analysis_key = NULL, analysis_key_conf = NULL,
       category      = CASE WHEN category_source = 'manual' THEN category ELSE ? END,
       category_conf = CASE WHEN category_source = 'manual' THEN category_conf ELSE ? END,
       subtype       = CASE WHEN subtype_source = 'manual' THEN subtype ELSE ? END,

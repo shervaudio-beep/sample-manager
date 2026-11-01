@@ -27,6 +27,8 @@ Set `SAMPLE_MANAGER_DATA_DIR` to use a different (e.g. throwaway) library.
 | `src/main/scan/scanner.ts` | Folder walk, metadata, rescan / missing / moved-file relink |
 | `src/main/playback.ts` | `sm-audio://` streaming protocol (byte ranges) and native drag-out |
 | `src/main/audio.ts` | Range parsing, AIFF → WAV preview conversion |
+| `src/shared/analysis.ts` | Tempo and key detection (onset envelope, comb autocorrelation, chroma + key profiles) |
+| `src/main/analysis.ts`, `src/renderer/src/analyzer.ts` | Analysis queue and the hidden page that decodes audio for it |
 | `src/main/dupes/` | Duplicate finding: audio location per format, staged hashing, worker |
 | `src/main/scan/worker.ts` | Runs scans on a worker thread so the UI stays responsive |
 | `src/main/scan/categorize.ts` | Beat / Demo / Music / Drum + drum sub-type rules |
@@ -76,6 +78,13 @@ FLAC, MP3 and M4A are looked inside; other formats are compared whole). It runs 
 after every scan and only reads what it must. The Duplicates view can move extra copies to the
 Recycle Bin/Trash, but only after a confirmation listing the files, never the last copy of a
 sound, and the copy that stays inherits the others' tags, ratings, notes and collections.
+
+BPM and key are also detected by listening to the audio, in the background after each scan
+(newest files first). Detected values only fill in what file names, folders and tags don't say,
+and only when the detector is confident; they never replace a value you set. The inspector shows
+what was detected next to the value in use, with a button to use it. Drum one-shots are skipped;
+808s and other short melodic sounds get their note. Right-click › Detect BPM and Key Again
+re-runs it for chosen files.
 
 Edits (category, type, BPM, key, tags, rating, favorites, notes) only change the library
 index, never the audio files. Category, type, BPM and key you set are marked *manual* and a

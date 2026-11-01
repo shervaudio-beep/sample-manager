@@ -19,7 +19,7 @@ import { CATEGORIES, DRUM_SUBTYPES, MUSICAL_KEYS } from '../shared/types'
 
 export type Db = DatabaseSync
 
-const SCHEMA_VERSION = 4
+const SCHEMA_VERSION = 5
 
 const MIGRATIONS: Record<number, string> = {
   1: `
@@ -147,6 +147,16 @@ const MIGRATIONS: Record<number, string> = {
     ALTER TABLE files ADD COLUMN audio_qhash TEXT;
     CREATE INDEX files_audio_len ON files(audio_len);
     CREATE INDEX files_qhash ON files(audio_qhash);
+  `,
+  5: `
+    -- What listening to the audio found. Kept apart from bpm/musical_key so the inspector can
+    -- show a detected value next to one from the file name; analyzed_v is the algorithm version.
+    ALTER TABLE files ADD COLUMN analysis_bpm REAL;
+    ALTER TABLE files ADD COLUMN analysis_bpm_conf REAL;
+    ALTER TABLE files ADD COLUMN analysis_key TEXT;
+    ALTER TABLE files ADD COLUMN analysis_key_conf REAL;
+    ALTER TABLE files ADD COLUMN analyzed_v INTEGER;
+    CREATE INDEX files_analyzed ON files(analyzed_v);
   `
 }
 
@@ -379,6 +389,10 @@ interface FileDbRow {
   date_added: number
   audio_hash: string | null
   dup_count: number
+  analysis_bpm: number | null
+  analysis_bpm_conf: number | null
+  analysis_key: string | null
+  analysis_key_conf: number | null
 }
 
 // Tag names joined with a unit separator, which can't appear in a tag name.
@@ -416,7 +430,11 @@ function toFileRow(r: FileDbRow): FileRow {
     tags: r.tag_list ? r.tag_list.split('\x1f').sort((a, b) => a.localeCompare(b)) : [],
     dateAdded: r.date_added,
     audioHash: r.audio_hash,
-    dupCount: r.dup_count
+    dupCount: r.dup_count,
+    analysisBpm: r.analysis_bpm,
+    analysisBpmConfidence: r.analysis_bpm_conf,
+    analysisKey: r.analysis_key,
+    analysisKeyConfidence: r.analysis_key_conf
   }
 }
 
@@ -777,6 +795,61 @@ export function idsForPaths(db: Db, paths: string[]): number[] {
     .all(JSON.stringify(paths)) as Array<{ id: number; path: string }>
   const byPath = new Map(rows.map((r) => [r.path, r.id]))
   return paths.map((p) => byPath.get(p)).filter((id): id is number => id != null)
+}
+
+// ---------- audio analysis ----------
+
+export interface AnalysisCandidate {
+  id: number
+  category: Category
+  subtype: DrumSubtype | null
+  durationMs: number
+}
+
+/** Files not yet analyzed with this version of the algorithms, newest first. */
+export function analysisQueue(db: Db, version: number): AnalysisCandidate[] {
+  return db
+    .prepare(
+      `SELECT id, category, subtype, duration_ms AS durationMs FROM files
+       WHERE status = 'ok' AND coalesce(analyzed_v, 0) < ? AND duration_ms IS NOT NULL AND scan_error IS NULL
+       ORDER BY date_added DESC, id DESC`
+    )
+    .all(version) as unknown as AnalysisCandidate[]
+}
+
+/** Record that these files need nothing (e.g. drum one-shots), so they aren't queued again. */
+export function markAnalyzed(db: Db, ids: number[], version: number): void {
+  if (ids.length) db.prepare(`UPDATE files SET analyzed_v = ? WHERE id IN ${ID_LIST}`).run(version, JSON.stringify(ids))
+}
+
+/**
+ * Store what analysis found. It becomes the file's BPM/key only where there's nothing better:
+ * no value from the name, folder or tags, never over a manual edit (including a cleared one),
+ * and only when the detector is confident enough.
+ */
+export function saveAnalysis(
+  db: Db,
+  id: number,
+  version: number,
+  r: { bpm: number | null; bpmConfidence: number; key: string | null; keyConfidence: number },
+  thresholds: { bpm: number; key: number }
+): void {
+  const useBpm = r.bpm != null && r.bpmConfidence >= thresholds.bpm ? 1 : 0
+  const useKey = r.key != null && MUSICAL_KEYS.includes(r.key) && r.keyConfidence >= thresholds.key ? 1 : 0
+  db.prepare(
+    `UPDATE files SET analyzed_v = :v,
+       analysis_bpm = :bpm, analysis_bpm_conf = :bpmConf, analysis_key = :key, analysis_key_conf = :keyConf,
+       bpm = CASE WHEN :useBpm AND (bpm_source IS NULL OR bpm_source = 'analysis') THEN :bpm ELSE bpm END,
+       bpm_source = CASE WHEN :useBpm AND (bpm_source IS NULL OR bpm_source = 'analysis') THEN 'analysis' ELSE bpm_source END,
+       musical_key = CASE WHEN :useKey AND (key_source IS NULL OR key_source = 'analysis') THEN :key ELSE musical_key END,
+       key_source = CASE WHEN :useKey AND (key_source IS NULL OR key_source = 'analysis') THEN 'analysis' ELSE key_source END
+     WHERE id = :id`
+  ).run({ v: version, bpm: r.bpm, bpmConf: r.bpmConfidence, key: r.key, keyConf: r.keyConfidence, useBpm, useKey, id })
+}
+
+/** Analyze these files again on the next pass. */
+export function resetAnalysis(db: Db, ids: number[]): void {
+  db.prepare(`UPDATE files SET analyzed_v = NULL WHERE id IN ${ID_LIST}`).run(JSON.stringify(ids))
 }
 
 // ---------- waveforms ----------

@@ -30,13 +30,15 @@ import {
   queryIds,
   removeRoot,
   removeTags,
+  resetAnalysis,
   saveWaveform,
   tagsForFiles,
   updateFiles,
   type Db,
   type Waveform
 } from './db'
-import { handleAudioProtocol, registerAudioScheme, startFileDrag } from './playback'
+import { AudioAnalyzer } from './analysis'
+import { AUDIO_SCHEME, handleAudioProtocol, registerAudioScheme, startFileDrag } from './playback'
 import type { DupeEvent, FilePatch, FileQuery, FileRow, ScanEvent } from '../shared/types'
 
 let db: Db
@@ -44,6 +46,7 @@ let win: BrowserWindow | null = null
 let scanWorker: Worker | null = null
 let queuedRoots = new Set<number>()
 let dupeWorker: Worker | null = null
+let analyzer: AudioAnalyzer
 let dupeAgain = false
 
 // Lets test runs use a throwaway library instead of your real one.
@@ -119,6 +122,13 @@ function showFileMenu(sender: Electron.WebContents, ids: number[], ctx: { collec
       }
     })
   }
+  template.push({
+    label: n === 1 ? 'Detect BPM and Key Again' : `Detect BPM and Key Again for ${n} Files`,
+    click: () => {
+      resetAnalysis(db, ids)
+      void analyzer.run()
+    }
+  })
   if (ctx.duplicates) {
     template.push({
       label: `Move to ${binName()}…`,
@@ -185,6 +195,9 @@ function startDupeCheck(): void {
     if (dupeAgain) {
       dupeAgain = false
       startDupeCheck()
+    } else {
+      // Then listen for tempo and key in anything new.
+      void analyzer.run()
     }
   })
 }
@@ -291,6 +304,7 @@ function registerIpc(): void {
   ipcMain.handle('collections:remove', (_e, id: number, ids: number[]) => removeFromCollection(db, id, ids))
   ipcMain.handle('collections:forFiles', (_e, ids: number[]) => collectionsForFiles(db, ids))
   ipcMain.on('menu:files', (e, ids: number[], ctx: { collectionId?: number; duplicates?: boolean }) => showFileMenu(e.sender, ids, ctx ?? {}))
+  ipcMain.handle('analysis:running', () => analyzer.busy)
   ipcMain.handle('dupes:check', () => startDupeCheck())
   ipcMain.handle('dupes:running', () => dupeWorker != null)
   ipcMain.handle('dupes:extraIds', (_e, q: Partial<FileQuery>) => extraCopyIds(db, q))
@@ -317,6 +331,11 @@ app.whenReady().then(() => {
   db = openDb(dbPath())
   registerIpc()
   handleAudioProtocol((id) => getFile(db, id))
+  analyzer = new AudioAnalyzer(
+    () => db,
+    (e) => win?.webContents.send('analysis:event', e),
+    (id) => `${AUDIO_SCHEME}://file/${id}`
+  )
   createWindow()
   // Catch up on anything not yet checked (e.g. a library from before duplicate finding).
   win!.webContents.once('did-finish-load', () => startDupeCheck())
@@ -332,5 +351,6 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   scanWorker?.terminate()
   dupeWorker?.terminate()
+  analyzer?.stop()
   db?.close()
 })

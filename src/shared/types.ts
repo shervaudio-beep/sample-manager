@@ -92,6 +92,11 @@ export interface FileRow {
   audioHash: string | null
   /** How many other files (present on disk) have exactly the same audio. */
   dupCount: number
+  /** What listening to the audio found, whether or not it's the value in use. */
+  analysisBpm: number | null
+  analysisBpmConfidence: number | null
+  analysisKey: string | null
+  analysisKeyConfidence: number | null
 }
 
 /** A user edit to one or more files. Category, type, BPM and key become 'manual' and survive rescans. */
@@ -171,6 +176,21 @@ export type DupeEvent =
   | { type: 'progress'; stage: 'locating' | 'comparing' | 'verifying'; done: number; total: number }
   | { type: 'done'; groups: number }
   | { type: 'error'; message: string }
+
+export type AnalysisEvent = { type: 'progress'; done: number; total: number } | { type: 'done' }
+
+/** A file for the hidden analyzer page to decode and analyze. */
+export interface AnalyzerJob {
+  id: number
+  url: string
+  request: import('./analysis').AnalysisRequest
+}
+
+export interface AnalyzerReply {
+  id: number
+  result?: import('./analysis').AnalysisResult
+  error?: string
+}
 
 export type ScanEvent =
   | { type: 'start'; rootId: number; path: string }

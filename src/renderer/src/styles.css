@@ -1283,3 +1283,39 @@ select.input {
 .insp-dupe-more {
   color: var(--faint);
 }
+
+/* ---------- detected tempo/key ---------- */
+
+.field-input {
+  min-width: 0;
+}
+
+.detected {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.detected.sure {
+  color: var(--cat-music);
+}
+
+.detected.likely {
+  color: var(--muted);
+}
+
+.detected .link-btn {
+  font-size: 11px;
+  margin-left: auto;
+}
+
+.field {
+  align-items: start;
+}
+
+.field .k {
+  padding-top: 4px;
+}

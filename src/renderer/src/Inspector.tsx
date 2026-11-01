@@ -2,6 +2,7 @@
 // Edits only change the library index; the audio files themselves are never written.
 
 import { useEffect, useRef, useState } from 'react'
+import { APPLY_BPM_CONFIDENCE, APPLY_KEY_CONFIDENCE } from '../../shared/analysis'
 import { CATEGORIES, CATEGORY_SHORT, DRUM_SUBTYPES, MUSICAL_KEYS, SUBTYPE_LABELS } from '../../shared/types'
 import type { Collection, DrumSubtype, FilePatch, FileRow, TagInfo, ValueSource } from '../../shared/types'
 import { formatBpm, formatDate, formatDuration, formatSize, stripExt } from './format'
@@ -111,9 +112,27 @@ function SingleFile({ id, version, allTags, allCollections, onChanged, onShowDup
         )}
         <Field label="BPM" source={file.bpmSource}>
           <BpmInput value={file.bpm} onCommit={(bpm) => edit({ bpm })} />
+          {file.analysisBpm != null && (
+            <Detected
+              text={`${formatBpm(file.analysisBpm)} BPM`}
+              confidence={file.analysisBpmConfidence ?? 0}
+              threshold={APPLY_BPM_CONFIDENCE}
+              differs={file.bpm == null || Math.abs(file.bpm - file.analysisBpm) > 0.05}
+              onUse={() => edit({ bpm: file.analysisBpm })}
+            />
+          )}
         </Field>
         <Field label="Key" source={file.keySource}>
           <KeySelect value={file.key} onPick={(key) => edit({ key })} />
+          {file.analysisKey != null && (
+            <Detected
+              text={keyName(file.analysisKey, file.category === 'drum' || (file.durationMs ?? 0) < 2500)}
+              confidence={file.analysisKeyConfidence ?? 0}
+              threshold={APPLY_KEY_CONFIDENCE}
+              differs={file.key !== file.analysisKey}
+              onUse={() => edit({ key: file.analysisKey })}
+            />
+          )}
         </Field>
       </div>
 
@@ -243,6 +262,39 @@ function Field({ label, source, children }: { label: string; source?: ValueSourc
       <div className="field-input">{children}</div>
     </div>
   )
+}
+
+/** "Detected 128 BPM · sure [Use]" under a field. */
+function Detected({
+  text,
+  confidence,
+  threshold,
+  differs,
+  onUse
+}: {
+  text: string
+  confidence: number
+  threshold: number
+  differs: boolean
+  onUse: () => void
+}): React.JSX.Element {
+  const level = confidence >= Math.max(0.7, threshold) ? 'sure' : confidence >= threshold ? 'likely' : 'unsure'
+  return (
+    <div className={`detected ${level}`} title={`Found by listening to the audio. Confidence ${Math.round(confidence * 100)}%.`}>
+      Detected {text} · {level}
+      {differs && (
+        <button className="link-btn" onClick={onUse}>
+          Use
+        </button>
+      )}
+    </div>
+  )
+}
+
+/** "A minor" / "F major"; a one-shot's "key" is really its note. */
+function keyName(key: string, note: boolean): string {
+  if (note) return `note ${key.replace(/m$/, '')}`
+  return key.endsWith('m') ? `${key.slice(0, -1)} minor` : `${key} major`
 }
 
 function ReadOnly({ label, value }: { label: string; value: string }): React.JSX.Element {

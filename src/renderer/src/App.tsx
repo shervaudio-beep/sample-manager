@@ -44,6 +44,7 @@ export function App(): React.JSX.Element {
   const [renamingId, setRenamingId] = useState<number | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [dupes, setDupes] = useState<DupeState>({ running: false, stage: null, done: 0, total: 0 })
+  const [analysis, setAnalysis] = useState<{ running: boolean; done: number; total: number }>({ running: false, done: 0, total: 0 })
   const noticeTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   // Files being dragged out of the list, so a drop on a collection knows what it got.
   const dragIds = useRef<number[] | null>(null)
@@ -87,6 +88,25 @@ export function App(): React.JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [refreshLibrary]
   )
+
+  // Background tempo/key detection (runs after duplicate checking). Detected values appear
+  // in the list as they come in, refreshed every few seconds rather than per file.
+  useEffect(() => {
+    window.api.isAnalyzing().then((running) => setAnalysis((a) => ({ ...a, running })))
+    let last = 0
+    return window.api.onAnalysisEvent((e) => {
+      if (e.type === 'progress') {
+        setAnalysis({ running: true, done: e.done, total: e.total })
+        if (Date.now() - last > 3000) {
+          last = Date.now()
+          refreshLibrary()
+        }
+      } else {
+        setAnalysis({ running: false, done: 0, total: 0 })
+        refreshLibrary()
+      }
+    })
+  }, [refreshLibrary])
 
   // Background duplicate checking (runs after every scan).
   useEffect(() => {
@@ -327,6 +347,7 @@ export function App(): React.JSX.Element {
         roots={roots}
         counts={counts}
         dupes={dupes}
+        analysis={analysis}
         tags={tags}
         collections={collections}
         renamingId={renamingId}

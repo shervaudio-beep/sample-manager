@@ -7,6 +7,7 @@ interface Props {
   roots: Root[]
   counts: LibraryCounts | null
   dupes: DupeState
+  analysis: { running: boolean; done: number; total: number }
   tags: TagInfo[]
   collections: Collection[]
   /** Collection whose name is being edited inline (just created, or double-clicked). */
@@ -204,6 +205,11 @@ export function Sidebar(props: Props): React.JSX.Element {
           <div className="scan-msg">
             Checking for duplicates
             {props.dupes.total > 0 && ` · ${Math.round((props.dupes.done / props.dupes.total) * 100)}%`}
+          </div>
+        )}
+        {!scan.running && !props.dupes.running && props.analysis.running && props.analysis.total > 0 && (
+          <div className="scan-msg" title="Listening to new files for tempo and key. Only fills in what the file names don't say.">
+            Detecting BPM & key · {props.analysis.done.toLocaleString()} / {props.analysis.total.toLocaleString()}
           </div>
         )}
         {counts && counts.missing > 0 && <div className="scan-msg warn">{counts.missing.toLocaleString()} files missing</div>}

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { Collection, DupeEvent, FilePatch, FileQuery, FileRow, LibraryCounts, Root, ScanEvent, TagInfo } from '../shared/types'
+import type { AnalysisEvent, Collection, DupeEvent, FilePatch, FileQuery, FileRow, LibraryCounts, Root, ScanEvent, TagInfo } from '../shared/types'
 import type { Waveform } from '../main/db'
 
 const api = {
@@ -31,6 +31,12 @@ const api = {
   duplicatesOf: (id: number): Promise<FileRow[]> => ipcRenderer.invoke('dupes:of', id),
   /** Asks for confirmation in a native dialog before anything is moved. */
   trashDuplicates: (ids: number[]): Promise<void> => ipcRenderer.invoke('dupes:trash', ids),
+  isAnalyzing: (): Promise<boolean> => ipcRenderer.invoke('analysis:running'),
+  onAnalysisEvent: (cb: (e: AnalysisEvent) => void): (() => void) => {
+    const listener = (_: unknown, e: AnalysisEvent): void => cb(e)
+    ipcRenderer.on('analysis:event', listener)
+    return () => ipcRenderer.removeListener('analysis:event', listener)
+  },
   onDupeEvent: (cb: (e: DupeEvent) => void): (() => void) => {
     const listener = (_: unknown, e: DupeEvent): void => cb(e)
     ipcRenderer.on('dupes:event', listener)
