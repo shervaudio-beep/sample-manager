@@ -17,7 +17,7 @@ import { CATEGORIES, DRUM_SUBTYPES, MUSICAL_KEYS } from '../shared/types'
 
 export type Db = DatabaseSync
 
-const SCHEMA_VERSION = 2
+const SCHEMA_VERSION = 3
 
 const MIGRATIONS: Record<number, string> = {
   1: `
@@ -99,6 +99,43 @@ const MIGRATIONS: Record<number, string> = {
       duration  REAL NOT NULL,
       peaks     TEXT NOT NULL
     );
+  `,
+  3: `
+    -- Search index: file name, its folders, tags and notes. The trigram tokenizer matches any
+    -- part of a word ("punch" finds "KickPunchy") and ignores case and accents.
+    -- Kept in step with files/file_tags by triggers, so nothing else has to remember it.
+    CREATE VIRTUAL TABLE files_fts USING fts5(name, folders, tags, notes, tokenize = 'trigram remove_diacritics 1');
+
+    CREATE TRIGGER files_fts_insert AFTER INSERT ON files BEGIN
+      INSERT INTO files_fts (rowid, name, folders, tags, notes)
+      VALUES (new.id, new.name, substr(new.rel_path, 1, length(new.rel_path) - length(new.name)), '', new.notes);
+    END;
+    CREATE TRIGGER files_fts_update AFTER UPDATE OF name, rel_path, notes ON files BEGIN
+      UPDATE files_fts SET name = new.name,
+        folders = substr(new.rel_path, 1, length(new.rel_path) - length(new.name)), notes = new.notes
+      WHERE rowid = new.id;
+    END;
+    CREATE TRIGGER files_fts_delete AFTER DELETE ON files BEGIN
+      DELETE FROM files_fts WHERE rowid = old.id;
+    END;
+    CREATE TRIGGER file_tags_fts_insert AFTER INSERT ON file_tags BEGIN
+      UPDATE files_fts SET tags = (
+        SELECT coalesce(group_concat(t.name, ' '), '') FROM file_tags ft JOIN tags t ON t.id = ft.tag_id
+        WHERE ft.file_id = new.file_id)
+      WHERE rowid = new.file_id;
+    END;
+    CREATE TRIGGER file_tags_fts_delete AFTER DELETE ON file_tags BEGIN
+      UPDATE files_fts SET tags = (
+        SELECT coalesce(group_concat(t.name, ' '), '') FROM file_tags ft JOIN tags t ON t.id = ft.tag_id
+        WHERE ft.file_id = old.file_id)
+      WHERE rowid = old.file_id;
+    END;
+
+    INSERT INTO files_fts (rowid, name, folders, tags, notes)
+    SELECT f.id, f.name, substr(f.rel_path, 1, length(f.rel_path) - length(f.name)),
+      coalesce((SELECT group_concat(t.name, ' ') FROM file_tags ft JOIN tags t ON t.id = ft.tag_id WHERE ft.file_id = f.id), ''),
+      f.notes
+    FROM files f;
   `
 }
 
@@ -185,6 +222,33 @@ function orderClause(q: ListQuery): string {
 /** Bind a list of ids as one parameter, so a 50k-file selection doesn't hit SQLite's variable limit. */
 const ID_LIST = '(SELECT value FROM json_each(?))'
 
+/** Split a search into terms; "double quotes" keep words together, a leading - excludes. */
+export function parseSearch(text: string): Array<{ term: string; exclude: boolean }> {
+  const out: Array<{ term: string; exclude: boolean }> = []
+  for (const m of text.matchAll(/(-?)(?:"([^"]*)"?|(\S+))/g)) {
+    const term = (m[2] ?? m[3] ?? '').trim()
+    if (!term || term === '-') continue
+    out.push({ term, exclude: m[1] === '-' })
+  }
+  return out
+}
+
+const likeEscape = (s: string): string => '%' + s.replace(/[\\%_]/g, (c) => '\\' + c) + '%'
+
+/** SQL matching one search term against name, folders, tags and notes. */
+function searchTerm(term: string): { sql: string; params: string[] } {
+  // The trigram index needs 3+ characters; shorter terms fall back to a scan (still fast at 50k).
+  if ([...term].length >= 3) {
+    return { sql: 'id IN (SELECT rowid FROM files_fts WHERE files_fts MATCH ?)', params: ['"' + term.replace(/"/g, '""') + '"'] }
+  }
+  const like = likeEscape(term)
+  return {
+    sql: `(rel_path LIKE ? ESCAPE '\\' OR notes LIKE ? ESCAPE '\\' OR id IN (
+      SELECT ft.file_id FROM file_tags ft JOIN tags t ON t.id = ft.tag_id WHERE t.name LIKE ? ESCAPE '\\'))`,
+    params: [like, like, like]
+  }
+}
+
 function whereClause(q: Partial<FileQuery>): { sql: string; params: Array<string | number> } {
   const conds: string[] = []
   const params: Array<string | number> = []
@@ -205,6 +269,52 @@ function whereClause(q: Partial<FileQuery>): { sql: string; params: Array<string
   if (q.tagId != null) {
     conds.push('id IN (SELECT file_id FROM file_tags WHERE tag_id = ?)')
     params.push(q.tagId)
+  }
+
+  for (const { term, exclude } of parseSearch(q.search ?? '')) {
+    const t = searchTerm(term)
+    conds.push(exclude ? `NOT ${t.sql}` : t.sql)
+    params.push(...t.params)
+  }
+
+  const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
+  const bpmMin = num(q.bpmMin)
+  const bpmMax = num(q.bpmMax)
+  if (bpmMin != null || bpmMax != null) {
+    const lo = bpmMin ?? 0
+    const hi = bpmMax ?? 10_000
+    // Half/double time: a 70 BPM loop also fits a 140 search, and the other way round.
+    conds.push(
+      q.bpmHalfDouble
+        ? '(bpm BETWEEN ? AND ? OR bpm * 2 BETWEEN ? AND ? OR bpm / 2 BETWEEN ? AND ?)'
+        : 'bpm BETWEEN ? AND ?'
+    )
+    params.push(...(q.bpmHalfDouble ? [lo, hi, lo, hi, lo, hi] : [lo, hi]))
+  }
+  const keys = (q.keys ?? []).filter((k) => MUSICAL_KEYS.includes(k))
+  if (keys.length) {
+    conds.push(`musical_key IN (${keys.map(() => '?').join(', ')})`)
+    params.push(...keys)
+  }
+  const minRating = num(q.minRating)
+  if (minRating) {
+    conds.push('rating >= ?')
+    params.push(minRating)
+  }
+  const durMin = num(q.durationMin)
+  const durMax = num(q.durationMax)
+  if (durMin != null) {
+    conds.push('duration_ms >= ?')
+    params.push(durMin)
+  }
+  if (durMax != null) {
+    conds.push('duration_ms < ?')
+    params.push(durMax)
+  }
+  const exts = (q.exts ?? []).filter((e) => /^[a-z0-9]{1,5}$/.test(e))
+  if (exts.length) {
+    conds.push(`ext IN (${exts.map(() => '?').join(', ')})`)
+    params.push(...exts)
   }
   return { sql: conds.length ? 'WHERE ' + conds.join(' AND ') : '', params }
 }

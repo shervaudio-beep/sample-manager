@@ -115,6 +115,18 @@ export interface FileQuery {
   rootId?: number
   favorite?: boolean
   tagId?: number
+  /** Words to find in name, folders, tags and notes. */
+  search?: string
+  bpmMin?: number
+  bpmMax?: number
+  /** Also match files at half or double the BPM range. */
+  bpmHalfDouble?: boolean
+  keys?: string[]
+  minRating?: number
+  /** Length range in ms; max is exclusive. */
+  durationMin?: number
+  durationMax?: number
+  exts?: string[]
   includeMissing?: boolean
   sort: SortField
   desc: boolean

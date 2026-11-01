@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Category, DrumSubtype, FilePatch, FileRow, LibraryCounts, Root, ScanEvent, SortField, TagInfo } from '../../shared/types'
 import { CATEGORY_LABELS, SUBTYPE_LABELS } from '../../shared/types'
 import { FileTable, type ClickMods } from './FileTable'
+import { activeFilterCount, FilterBar, filtersToQuery, NO_FILTERS, SearchBox, type Filters } from './FilterBar'
 import { Inspector } from './Inspector'
 import { PlayerBar, type PlayerHandle } from './PlayerBar'
 import { Sidebar } from './Sidebar'
@@ -31,6 +32,9 @@ export function App(): React.JSX.Element {
   const [tags, setTags] = useState<TagInfo[]>([])
   const [view, setView] = useState<View>({})
   const [sort, setSort] = useState<{ field: SortField; desc: boolean }>({ field: 'dateAdded', desc: true })
+  const [filters, setFilters] = useState<Filters>(NO_FILTERS)
+  const [search, setSearch] = useState('')
+  const searchBox = useRef<HTMLInputElement>(null)
   // `focus` is the row the keyboard and player follow; `selection` is what edits and drags apply to.
   const [focus, setFocus] = useState<{ id: number; index: number } | null>(null)
   const [selection, setSelection] = useState<Set<number>>(new Set())
@@ -85,12 +89,19 @@ export function App(): React.JSX.Element {
     })
   }, [refreshLibrary])
 
+  // Search the library a moment after typing pauses, not on every keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setFilters((f) => (f.search === search ? f : { ...f, search })), 150)
+    return () => clearTimeout(t)
+  }, [search])
+
   const filter = {
     category: view.category,
     subtype: view.subtype,
     rootId: view.rootId,
     favorite: view.favorite,
     tagId: view.tagId,
+    ...filtersToQuery(filters, filters.search),
     sort: sort.field,
     desc: sort.desc
   }
@@ -101,6 +112,10 @@ export function App(): React.JSX.Element {
     setSelection(new Set())
     anchor.current = null
   }
+
+  // Row positions mean nothing once the result set changes.
+  const filtersKey = JSON.stringify(filters)
+  useEffect(clearSelection, [filtersKey])
 
   const onSort = (field: SortField): void => {
     setSort((s) => (s.field === field ? { field, desc: !s.desc } : { field, desc: field === 'dateAdded' || field === 'rating' }))
@@ -150,8 +165,19 @@ export function App(): React.JSX.Element {
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       const t = e.target as HTMLElement
-      if (t.closest('input, textarea, select, [contenteditable]')) return
       const mod = isMac ? e.metaKey : e.ctrlKey
+      if (mod && e.code === 'KeyF') {
+        e.preventDefault()
+        searchBox.current?.focus()
+        searchBox.current?.select()
+        return
+      }
+      if (t.closest('input, textarea, select, [contenteditable]')) return
+      if (e.key === '/') {
+        e.preventDefault()
+        searchBox.current?.focus()
+        return
+      }
       if (mod && e.code === 'KeyA') {
         e.preventDefault()
         window.api.queryIds(filter).then((ids) => setSelection(new Set(ids)))
@@ -239,7 +265,17 @@ export function App(): React.JSX.Element {
               <span className="spinner" /> Scanning… {scan.processed.toLocaleString()} / {scan.found.toLocaleString()}
             </div>
           )}
+          <SearchBox
+            ref={searchBox}
+            value={search}
+            onChange={setSearch}
+            onEnterList={() => {
+              const row = list.rowAt(0)
+              if (row) selectOne(0, row)
+            }}
+          />
         </div>
+        <FilterBar filters={filters} onChange={(f) => setFilters({ ...f, search: filters.search })} />
         <FileTable
           list={list}
           sort={sort}
@@ -249,6 +285,11 @@ export function App(): React.JSX.Element {
           onRowClick={onRowClick}
           onRate={(row, rating) => edit(targetIds(row), { rating })}
           onFavorite={(row) => edit(targetIds(row), { favorite: !row.favorite })}
+          emptyText={
+            filters.search || activeFilterCount(filters)
+              ? 'No files match this search and these filters.'
+              : 'No files here yet. Add a folder on the left to start indexing.'
+          }
         />
       </main>
       <Inspector ids={[...selection]} version={version} allTags={tags} onChanged={refreshLibrary} />

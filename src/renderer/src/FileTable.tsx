@@ -22,6 +22,7 @@ interface Props {
   onRowClick: (index: number, row: FileRow, mods: ClickMods) => void
   onRate: (row: FileRow, rating: number) => void
   onFavorite: (row: FileRow) => void
+  emptyText: string
 }
 
 const COLUMNS: Array<{ field: SortField | null; label: string; className: string; title?: string }> = [
@@ -40,7 +41,7 @@ const COLUMNS: Array<{ field: SortField | null; label: string; className: string
 const ROW_HEIGHT = 30
 const isMac = navigator.platform.toLowerCase().includes('mac')
 
-export function FileTable({ list, sort, onSort, focus, selection, onRowClick, onRate, onFavorite }: Props): React.JSX.Element {
+export function FileTable({ list, sort, onSort, focus, selection, onRowClick, onRate, onFavorite, emptyText }: Props): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null)
   const virtualizer = useVirtualizer({
     count: list.total,
@@ -79,7 +80,7 @@ export function FileTable({ list, sort, onSort, focus, selection, onRowClick, on
         )}
       </div>
       <div className="tbody" ref={scrollRef}>
-        {list.total === 0 && <div className="empty">No files here yet. Add a folder on the left to start indexing.</div>}
+        {list.total === 0 && <div className="empty">{emptyText}</div>}
         <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
           {items.map((vi) => {
             const f = list.rowAt(vi.index)

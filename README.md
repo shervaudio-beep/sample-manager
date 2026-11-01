@@ -38,7 +38,7 @@ Set `SAMPLE_MANAGER_DATA_DIR` to use a different (e.g. throwaway) library.
 1. **Scanning + list view** ✅
 2. **Preview player, waveform, keyboard navigation, drag to DAW** ✅
 3. **Editing: category, drum type, BPM, key, tags, rating, favorites, notes; multi-select** ✅
-4. Search and filters
+4. **Search and filters: BPM range (with half/double time), key (with compatible keys), rating, length, format** ✅
 5. Collections
 6. Duplicates
 
@@ -54,10 +54,16 @@ Set `SAMPLE_MANAGER_DATA_DIR` to use a different (e.g. throwaway) library.
 | ↑ / ↓ | Previous / next file, auto-preview |
 | 1–5, 0 | Rate the selection, clear rating |
 | F | Favorite / unfavorite the selection |
-| Esc | Stop |
+| Ctrl+F (⌘F) or / | Search |
+| ↓ or Enter in the search box | Jump to the first result and play it |
+| Esc | Stop (in the search box: clear it) |
 
 Drag any row into Ableton (or Finder/Explorer) to use the original file; nothing is copied.
 Dragging a selected row drags the whole selection.
+
+Search looks in file names, folder names, tags and notes, and matches any part of a word
+("punch" finds "KickPunchy"). Every word has to match; `"quotes"` keep words together and
+`-word` leaves files out. Filters stack on top of the sidebar view and the search.
 
 Edits (category, type, BPM, key, tags, rating, favorites, notes) only change the library
 index, never the audio files. Category, type, BPM and key you set are marked *manual* and a
