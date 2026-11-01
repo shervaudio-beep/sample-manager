@@ -27,6 +27,7 @@ Set `SAMPLE_MANAGER_DATA_DIR` to use a different (e.g. throwaway) library.
 | `src/main/scan/scanner.ts` | Folder walk, metadata, rescan / missing / moved-file relink |
 | `src/main/playback.ts` | `sm-audio://` streaming protocol (byte ranges) and native drag-out |
 | `src/main/audio.ts` | Range parsing, AIFF → WAV preview conversion |
+| `src/main/dupes/` | Duplicate finding: audio location per format, staged hashing, worker |
 | `src/main/scan/worker.ts` | Runs scans on a worker thread so the UI stays responsive |
 | `src/main/scan/categorize.ts` | Beat / Demo / Music / Drum + drum sub-type rules |
 | `src/main/scan/parseName.ts` | BPM and key from file and folder names |
@@ -40,7 +41,7 @@ Set `SAMPLE_MANAGER_DATA_DIR` to use a different (e.g. throwaway) library.
 3. **Editing: category, drum type, BPM, key, tags, rating, favorites, notes; multi-select** ✅
 4. **Search and filters: BPM range (with half/double time), key (with compatible keys), rating, length, format** ✅
 5. **Collections: lists of links to your files, nothing copied** ✅
-6. Duplicates
+6. **Duplicates: same audio found across names, folders and tags; extra copies go to the Recycle Bin/Trash only after you confirm** ✅
 
 ## Keys
 
@@ -69,6 +70,12 @@ Search looks in file names, folder names, tags and notes, and matches any part o
 Collections group files for a project or kit without copying them. Add files by dragging them
 onto a collection in the sidebar (or onto the Collections heading to make a new one), by
 right-clicking them, or from the inspector. Deleting a collection only deletes the list.
+
+Duplicates are found by comparing the audio itself, ignoring names, folders and tags (WAV, AIFF,
+FLAC, MP3 and M4A are looked inside; other formats are compared whole). It runs in the background
+after every scan and only reads what it must. The Duplicates view can move extra copies to the
+Recycle Bin/Trash, but only after a confirmation listing the files, never the last copy of a
+sound, and the copy that stays inherits the others' tags, ratings, notes and collections.
 
 Edits (category, type, BPM, key, tags, rating, favorites, notes) only change the library
 index, never the audio files. Category, type, BPM and key you set are marked *manual* and a

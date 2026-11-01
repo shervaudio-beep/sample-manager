@@ -26,6 +26,8 @@ interface Props {
   /** Start an OS drag of these files (to a DAW, Explorer/Finder or a collection). */
   onDragFiles: (ids: number[]) => void
   onContextMenu: (index: number, row: FileRow) => void
+  /** Duplicates view: draw a divider between sets and show each copy's folder. */
+  groupDuplicates?: boolean
 }
 
 const COLUMNS: Array<{ field: SortField | null; label: string; className: string; title?: string }> = [
@@ -44,7 +46,7 @@ const COLUMNS: Array<{ field: SortField | null; label: string; className: string
 const ROW_HEIGHT = 30
 const isMac = navigator.platform.toLowerCase().includes('mac')
 
-export function FileTable({ list, sort, onSort, focus, selection, onRowClick, onRate, onFavorite, emptyText, onDragFiles, onContextMenu }: Props): React.JSX.Element {
+export function FileTable({ list, sort, onSort, focus, selection, onRowClick, onRate, onFavorite, emptyText, onDragFiles, onContextMenu, groupDuplicates }: Props): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null)
   const virtualizer = useVirtualizer({
     count: list.total,
@@ -90,10 +92,11 @@ export function FileTable({ list, sort, onSort, focus, selection, onRowClick, on
             const style = { transform: `translateY(${vi.start}px)`, height: ROW_HEIGHT }
             if (!f) return <div key={vi.key} className="tr loading" style={style} />
             const isSelected = selection.has(f.id)
+            const groupStart = groupDuplicates && vi.index > 0 && list.rowAt(vi.index - 1)?.audioHash !== f.audioHash
             return (
               <div
                 key={vi.key}
-                className={`tr${isSelected ? ' selected' : ''}${f.id === focus?.id ? ' focused' : ''}${f.status !== 'ok' ? ' dim' : ''}`}
+                className={`tr${isSelected ? ' selected' : ''}${f.id === focus?.id ? ' focused' : ''}${f.status !== 'ok' ? ' dim' : ''}${groupStart ? ' group-start' : ''}`}
                 style={style}
                 onClick={(e) => onRowClick(vi.index, f, { toggle: isMac ? e.metaKey : e.ctrlKey, range: e.shiftKey })}
                 draggable={f.status === 'ok'}
@@ -127,7 +130,11 @@ export function FileTable({ list, sort, onSort, focus, selection, onRowClick, on
                 </div>
                 <div className="td c-name">
                   {stripExt(f.name)}
-                  {f.tags.length > 0 && <span className="row-tags">{f.tags.join(' · ')}</span>}
+                  {groupDuplicates ? (
+                    <span className="row-tags">{parentFolder(f.path)}</span>
+                  ) : (
+                    f.tags.length > 0 && <span className="row-tags">{f.tags.join(' · ')}</span>
+                  )}
                 </div>
                 <div className="td c-cat">
                   <span className={`pill cat-${f.category}`}>{CATEGORY_SHORT[f.category]}</span>
@@ -147,4 +154,10 @@ export function FileTable({ list, sort, onSort, focus, selection, onRowClick, on
       </div>
     </div>
   )
+}
+
+/** The last two folders above a file, e.g. "Drum Kits/Trap" — enough to tell copies apart. */
+function parentFolder(p: string): string {
+  const parts = p.split(/[\\/]/).filter(Boolean)
+  return parts.slice(-3, -1).join('/')
 }

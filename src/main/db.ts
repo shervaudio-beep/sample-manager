@@ -6,6 +6,7 @@ import type {
   Category,
   Collection,
   DrumSubtype,
+  DuplicateStats,
   FilePatch,
   FileQuery,
   FileRow,
@@ -18,7 +19,7 @@ import { CATEGORIES, DRUM_SUBTYPES, MUSICAL_KEYS } from '../shared/types'
 
 export type Db = DatabaseSync
 
-const SCHEMA_VERSION = 3
+const SCHEMA_VERSION = 4
 
 const MIGRATIONS: Record<number, string> = {
   1: `
@@ -137,6 +138,15 @@ const MIGRATIONS: Record<number, string> = {
       coalesce((SELECT group_concat(t.name, ' ') FROM file_tags ft JOIN tags t ON t.id = ft.tag_id WHERE ft.file_id = f.id), ''),
       f.notes
     FROM files f;
+  `,
+  4: `
+    -- Duplicate finding: where the audio sits in the file, a quick hash of its ends, and
+    -- (in audio_hash, which already exists) a full hash. All cleared when the file changes.
+    ALTER TABLE files ADD COLUMN audio_offset INTEGER;
+    ALTER TABLE files ADD COLUMN audio_len INTEGER;
+    ALTER TABLE files ADD COLUMN audio_qhash TEXT;
+    CREATE INDEX files_audio_len ON files(audio_len);
+    CREATE INDEX files_qhash ON files(audio_qhash);
   `
 }
 
@@ -215,6 +225,11 @@ type ListQuery = Omit<FileQuery, 'offset' | 'limit'>
 
 function orderClause(q: ListQuery): string {
   const dir = q.desc ? 'DESC' : 'ASC'
+  if (q.duplicates) {
+    // Keep each set of duplicates together; the chosen sort applies inside a set.
+    const inner = orderClause({ ...q, duplicates: false }).replace('ORDER BY ', '')
+    return `ORDER BY audio_hash, ${inner}`
+  }
   if (q.sort === 'position') {
     // The order files were added to the collection. The id is an integer we validated, so it's inlined.
     const cid = Number.isInteger(q.collectionId) ? q.collectionId : -1
@@ -225,6 +240,10 @@ function orderClause(q: ListQuery): string {
   const nullsLast = col.split(' ')[0]
   return `ORDER BY ${nullsLast} IS NULL, ${col} ${dir}, id ${dir}`
 }
+
+/** Audio hashes shared by two or more files that are on disk. */
+const DUPLICATE_HASHES = `SELECT audio_hash FROM files WHERE status = 'ok' AND audio_hash IS NOT NULL
+  GROUP BY audio_hash HAVING COUNT(*) > 1`
 
 /** Bind a list of ids as one parameter, so a 50k-file selection doesn't hit SQLite's variable limit. */
 const ID_LIST = '(SELECT value FROM json_each(?))'
@@ -277,6 +296,9 @@ function whereClause(q: Partial<FileQuery>): { sql: string; params: Array<string
     params.push(q.collectionId)
   }
   if (q.favorite) conds.push('favorite = 1')
+  if (q.duplicates) {
+    conds.push(`status = 'ok' AND audio_hash IN (${DUPLICATE_HASHES})`)
+  }
   if (q.tagId != null) {
     conds.push('id IN (SELECT file_id FROM file_tags WHERE tag_id = ?)')
     params.push(q.tagId)
@@ -355,12 +377,16 @@ interface FileDbRow {
   notes: string
   tag_list: string | null
   date_added: number
+  audio_hash: string | null
+  dup_count: number
 }
 
 // Tag names joined with a unit separator, which can't appear in a tag name.
 const SELECT_FILES = `SELECT files.*,
   (SELECT group_concat(t.name, char(31)) FROM file_tags ft JOIN tags t ON t.id = ft.tag_id
-   WHERE ft.file_id = files.id) AS tag_list
+   WHERE ft.file_id = files.id) AS tag_list,
+  CASE WHEN files.audio_hash IS NULL THEN 0 ELSE (SELECT COUNT(*) FROM files d
+    WHERE d.audio_hash = files.audio_hash AND d.status = 'ok' AND d.id != files.id) END AS dup_count
   FROM files`
 
 function toFileRow(r: FileDbRow): FileRow {
@@ -388,7 +414,9 @@ function toFileRow(r: FileDbRow): FileRow {
     favorite: r.favorite === 1,
     notes: r.notes,
     tags: r.tag_list ? r.tag_list.split('\x1f').sort((a, b) => a.localeCompare(b)) : [],
-    dateAdded: r.date_added
+    dateAdded: r.date_added,
+    audioHash: r.audio_hash,
+    dupCount: r.dup_count
   }
 }
 
@@ -439,7 +467,128 @@ export function libraryCounts(db: Db): LibraryCounts {
        FROM files`
     )
     .get() as { missing: number; favorites: number }
-  return { total, missing, favorites, byCategory, bySubtype }
+  return { total, missing, favorites, duplicates: duplicateStats(db), byCategory, bySubtype }
+}
+
+// ---------- duplicates ----------
+// Files are only ever moved to the Recycle Bin/Trash by the main process, after the user
+// confirms; these functions just plan that and tidy the index afterwards.
+
+export function duplicateStats(db: Db): DuplicateStats {
+  return db
+    .prepare(
+      `SELECT COUNT(*) AS groups, coalesce(SUM(n - 1), 0) AS extra, coalesce(SUM(extra_bytes), 0) AS extraBytes FROM (
+         SELECT COUNT(*) AS n, SUM(size) - MAX(size) AS extra_bytes FROM files
+         WHERE status = 'ok' AND audio_hash IS NOT NULL GROUP BY audio_hash HAVING COUNT(*) > 1)`
+    )
+    .get() as unknown as DuplicateStats
+}
+
+/**
+ * Ranks the copies in each duplicate set: the copy to keep comes first. Prefers the one you've
+ * put the most into (rating, favorite, tags, collections, notes), then the oldest in the library,
+ * then the shortest path.
+ */
+const RANKED_COPIES = `SELECT id, audio_hash, ROW_NUMBER() OVER (
+    PARTITION BY audio_hash ORDER BY
+      (rating > 0) + favorite + (notes != '') +
+      (SELECT COUNT(*) FROM file_tags ft WHERE ft.file_id = files.id) +
+      (SELECT COUNT(*) FROM collection_items ci WHERE ci.file_id = files.id) DESC,
+      date_added, length(path), id) AS rank
+  FROM files WHERE status = 'ok' AND audio_hash IN (${DUPLICATE_HASHES})`
+
+/** Every copy except the one to keep in each set, limited to what the current view shows. */
+export function extraCopyIds(db: Db, q: Partial<FileQuery>): number[] {
+  const { sql, params } = whereClause({ ...q, duplicates: true })
+  const rows = db
+    .prepare(`SELECT id FROM files ${sql} AND id IN (SELECT id FROM (${RANKED_COPIES}) WHERE rank > 1) ORDER BY audio_hash, id`)
+    .all(...params) as Array<{ id: number }>
+  return rows.map((r) => r.id)
+}
+
+export interface TrashPlanItem {
+  id: number
+  path: string
+  name: string
+  size: number
+  /** The copy that stays, which inherits this one's tags, rating, notes and collections. */
+  keeperId: number
+}
+
+/**
+ * Checks a request to send duplicates to the trash. Refuses anything that isn't a duplicate,
+ * and anything that would leave a set with no copy on disk.
+ */
+export function planTrash(db: Db, ids: number[]): { items: TrashPlanItem[] } | { error: string } {
+  const chosen = new Set(ids)
+  const ranked = db.prepare(`${RANKED_COPIES} ORDER BY audio_hash, rank`).all() as Array<{ id: number; audio_hash: string }>
+  const groups = new Map<string, number[]>()
+  for (const r of ranked) {
+    const g = groups.get(r.audio_hash) ?? []
+    g.push(r.id)
+    groups.set(r.audio_hash, g)
+  }
+  const items: TrashPlanItem[] = []
+  for (const id of chosen) {
+    const f = getFile(db, id)
+    const group = f?.audioHash ? groups.get(f.audioHash) : undefined
+    if (!f || !group?.includes(id)) return { error: `“${f?.name ?? 'A file'}” isn't a duplicate, so it can't be removed from here.` }
+    const keeperId = group.find((g) => !chosen.has(g))
+    if (keeperId == null) return { error: `That would remove every copy of “${f.name}”. Keep at least one.` }
+    items.push({ id, path: f.path, name: f.name, size: f.size, keeperId })
+  }
+  return { items }
+}
+
+/** Carry what you've added to a file over to its kept copy (nothing is lost by removing the other). */
+export function mergeFileData(db: Db, fromId: number, intoId: number): void {
+  transaction(db, () => {
+    db.prepare(
+      `UPDATE files SET
+         rating   = max(rating, (SELECT rating FROM files WHERE id = :from)),
+         favorite = max(favorite, (SELECT favorite FROM files WHERE id = :from)),
+         notes    = CASE
+           WHEN (SELECT notes FROM files WHERE id = :from) IN ('', notes) THEN notes
+           WHEN notes = '' THEN (SELECT notes FROM files WHERE id = :from)
+           ELSE notes || char(10) || char(10) || (SELECT notes FROM files WHERE id = :from) END
+       WHERE id = :into`
+    ).run({ from: fromId, into: intoId })
+    // Hand-set values move over only where the kept copy has none of its own.
+    for (const [col, src] of [
+      ['category', 'category_source'],
+      ['subtype', 'subtype_source'],
+      ['bpm', 'bpm_source'],
+      ['musical_key', 'key_source']
+    ]) {
+      db.prepare(
+        `UPDATE files SET ${col} = (SELECT ${col} FROM files WHERE id = :from), ${src} = 'manual'
+         WHERE id = :into AND coalesce(${src}, '') != 'manual'
+           AND (SELECT ${src} FROM files WHERE id = :from) = 'manual'`
+      ).run({ from: fromId, into: intoId })
+    }
+    db.prepare('INSERT OR IGNORE INTO file_tags (file_id, tag_id) SELECT ?, tag_id FROM file_tags WHERE file_id = ?').run(intoId, fromId)
+    db.prepare(
+      `INSERT OR IGNORE INTO collection_items (collection_id, file_id, position)
+       SELECT collection_id, ?, position FROM collection_items WHERE file_id = ?`
+    ).run(intoId, fromId)
+  })
+}
+
+/** The other copies of a file's audio that are on disk. */
+export function duplicatesOf(db: Db, id: number): FileRow[] {
+  const rows = db
+    .prepare(
+      `${SELECT_FILES} WHERE status = 'ok' AND id != ? AND audio_hash IS NOT NULL
+       AND audio_hash = (SELECT audio_hash FROM files WHERE id = ?) ORDER BY path`
+    )
+    .all(id, id) as unknown as FileDbRow[]
+  return rows.map(toFileRow)
+}
+
+/** Drop index entries for files that have been sent to the trash. */
+export function forgetFiles(db: Db, ids: number[]): void {
+  db.prepare(`DELETE FROM files WHERE id IN ${ID_LIST}`).run(JSON.stringify(ids))
+  db.exec('DELETE FROM tags WHERE id NOT IN (SELECT tag_id FROM file_tags)')
 }
 
 // ---------- edits ----------

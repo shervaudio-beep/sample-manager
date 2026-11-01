@@ -22,9 +22,10 @@ interface Props {
   allCollections: Collection[]
   /** Called after any edit so the list, counts and tags refresh. */
   onChanged: () => void
+  onShowDuplicates: () => void
 }
 
-export function Inspector({ ids, version, allTags, allCollections, onChanged }: Props): React.JSX.Element {
+export function Inspector({ ids, version, allTags, allCollections, onChanged, onShowDuplicates }: Props): React.JSX.Element {
   if (ids.length === 0) {
     return (
       <aside className="inspector">
@@ -35,15 +36,29 @@ export function Inspector({ ids, version, allTags, allCollections, onChanged }: 
   return (
     <aside className="inspector">
       {ids.length === 1 ? (
-        <SingleFile id={ids[0]} version={version} allTags={allTags} allCollections={allCollections} onChanged={onChanged} />
+        <SingleFile
+          id={ids[0]}
+          version={version}
+          allTags={allTags}
+          allCollections={allCollections}
+          onChanged={onChanged}
+          onShowDuplicates={onShowDuplicates}
+        />
       ) : (
-        <MultiFile ids={ids} version={version} allTags={allTags} allCollections={allCollections} onChanged={onChanged} />
+        <MultiFile
+          ids={ids}
+          version={version}
+          allTags={allTags}
+          allCollections={allCollections}
+          onChanged={onChanged}
+          onShowDuplicates={onShowDuplicates}
+        />
       )}
     </aside>
   )
 }
 
-function SingleFile({ id, version, allTags, allCollections, onChanged }: { id: number } & Omit<Props, 'ids'>): React.JSX.Element | null {
+function SingleFile({ id, version, allTags, allCollections, onChanged, onShowDuplicates }: { id: number } & Omit<Props, 'ids'>): React.JSX.Element | null {
   const [file, setFile] = useState<FileRow | null>(null)
 
   useEffect(() => {
@@ -71,6 +86,8 @@ function SingleFile({ id, version, allTags, allCollections, onChanged }: { id: n
       {file.status !== 'ok' && (
         <div className="insp-warn">{file.status === 'missing' ? 'File not found at this path.' : 'Folder is offline.'}</div>
       )}
+
+      {file.dupCount > 0 && <DuplicateNote id={file.id} version={version} onShow={onShowDuplicates} />}
 
       <div className="insp-rate">
         <Stars value={file.rating} onChange={(rating) => edit({ rating })} />
@@ -355,6 +372,35 @@ function NotesEditor({ value, onSave }: { value: string; onSave: (notes: string)
       }}
       onBlur={flush}
     />
+  )
+}
+
+/** "Same audio as" list for a file that has exact copies elsewhere. */
+function DuplicateNote({ id, version, onShow }: { id: number; version: number; onShow: () => void }): React.JSX.Element {
+  const [copies, setCopies] = useState<FileRow[]>([])
+  useEffect(() => {
+    let live = true
+    window.api.duplicatesOf(id).then((c) => live && setCopies(c))
+    return () => {
+      live = false
+    }
+  }, [id, version])
+  return (
+    <div className="insp-dupe">
+      <div className="insp-dupe-head">
+        ⧉ Same audio as {copies.length === 1 ? '1 other file' : `${copies.length} other files`}
+        <button className="link-btn" onClick={onShow}>
+          Review
+        </button>
+      </div>
+      {copies.slice(0, 5).map((c) => (
+        <button key={c.id} className="insp-dupe-path" title={`${c.path}\nClick to show in folder`} onClick={() => window.api.revealFile(c.id)}>
+          {/* The end of the path is what tells copies apart. */}
+          …/{c.path.split(/[\\/]/).slice(-3).join('/')}
+        </button>
+      ))}
+      {copies.length > 5 && <div className="insp-dupe-more">…and {copies.length - 5} more</div>}
+    </div>
   )
 }
 

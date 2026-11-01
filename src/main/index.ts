@@ -2,6 +2,7 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell } from 'ele
 import path from 'node:path'
 import type { Worker } from 'node:worker_threads'
 import createScanWorker from './scan/worker?nodeWorker'
+import createDupeWorker from './dupes/worker?nodeWorker'
 import {
   addRoot,
   addTags,
@@ -9,6 +10,11 @@ import {
   collectionsForFiles,
   createCollection,
   deleteCollection,
+  duplicatesOf,
+  extraCopyIds,
+  forgetFiles,
+  mergeFileData,
+  planTrash,
   idsForPaths,
   listCollections,
   removeFromCollection,
@@ -31,12 +37,14 @@ import {
   type Waveform
 } from './db'
 import { handleAudioProtocol, registerAudioScheme, startFileDrag } from './playback'
-import type { FilePatch, FileQuery, FileRow, ScanEvent } from '../shared/types'
+import type { DupeEvent, FilePatch, FileQuery, FileRow, ScanEvent } from '../shared/types'
 
 let db: Db
 let win: BrowserWindow | null = null
 let scanWorker: Worker | null = null
 let queuedRoots = new Set<number>()
+let dupeWorker: Worker | null = null
+let dupeAgain = false
 
 // Lets test runs use a throwaway library instead of your real one.
 if (process.env.SAMPLE_MANAGER_DATA_DIR) app.setPath('userData', process.env.SAMPLE_MANAGER_DATA_DIR)
@@ -69,11 +77,11 @@ function createWindow(): void {
 const send = (e: ScanEvent): void => win?.webContents.send('scan:event', e)
 
 /** Tell the UI the index changed outside its own calls (e.g. from the file menu). */
-const libraryChanged = (detail: { renameCollectionId?: number } = {}): void =>
+const libraryChanged = (detail: { renameCollectionId?: number; notice?: string } = {}): void =>
   win?.webContents.send('library:changed', detail)
 
 /** Right-click menu for files in the list. */
-function showFileMenu(sender: Electron.WebContents, ids: number[], ctx: { collectionId?: number }): void {
+function showFileMenu(sender: Electron.WebContents, ids: number[], ctx: { collectionId?: number; duplicates?: boolean }): void {
   if (!ids.length) return
   const n = ids.length
   const collections = listCollections(db)
@@ -111,6 +119,12 @@ function showFileMenu(sender: Electron.WebContents, ids: number[], ctx: { collec
       }
     })
   }
+  if (ctx.duplicates) {
+    template.push({
+      label: `Move to ${binName()}…`,
+      click: () => void trashAndReport(ids)
+    })
+  }
   template.push(
     { type: 'separator' },
     { label: process.platform === 'darwin' ? 'Reveal in Finder' : 'Show in Folder', enabled: !!first, click: () => first && shell.showItemInFolder(first.path) },
@@ -145,8 +159,101 @@ function startScan(rootIds: number[]): void {
       const next = [...queuedRoots]
       queuedRoots = new Set()
       startScan(next)
+    } else {
+      startDupeCheck()
     }
   })
+}
+
+/** Look for duplicates among new or changed files, in the background. */
+function startDupeCheck(): void {
+  if (dupeWorker) {
+    dupeAgain = true
+    return
+  }
+  dupeWorker = createDupeWorker({ workerData: { dbPath: dbPath() } })
+  const sendDupe = (e: DupeEvent): void => win?.webContents.send('dupes:event', e)
+  let finished = false
+  dupeWorker.on('message', (e: DupeEvent) => {
+    if (e.type !== 'progress') finished = true
+    sendDupe(e)
+  })
+  dupeWorker.on('error', (err: Error) => sendDupe({ type: 'error', message: err.message }))
+  dupeWorker.on('exit', () => {
+    dupeWorker = null
+    if (!finished) sendDupe({ type: 'done', groups: -1 })
+    if (dupeAgain) {
+      dupeAgain = false
+      startDupeCheck()
+    }
+  })
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024 ** 2) return `${Math.max(1, Math.round(n / 1024))} KB`
+  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`
+  return `${(n / 1024 ** 3).toFixed(2)} GB`
+}
+
+const binName = (): string => (process.platform === 'darwin' ? 'Trash' : 'Recycle Bin')
+
+/**
+ * Send extra copies of duplicate sounds to the Recycle Bin/Trash, after the user confirms in a
+ * native dialog. Never touches the last copy of a sound; the kept copy inherits tags, rating,
+ * notes and collections first. Files go to the bin, so they can be restored.
+ */
+async function trashDuplicates(ids: number[]): Promise<{ trashed: number; failed: string[]; freed: number } | null> {
+  const plan = planTrash(db, ids)
+  if ('error' in plan) {
+    await dialog.showMessageBox(win!, { type: 'info', message: 'Nothing was removed', detail: plan.error })
+    return null
+  }
+  const items = plan.items
+  if (!items.length) return null
+  const total = items.reduce((n, i) => n + i.size, 0)
+  const shown = items.slice(0, 8).map((i) => '• ' + i.path)
+  if (items.length > 8) shown.push(`…and ${items.length - 8} more`)
+  const n = items.length === 1 ? 'this duplicate file' : `these ${items.length} duplicate files`
+  const { response } = await dialog.showMessageBox(win!, {
+    type: 'warning',
+    title: 'Remove duplicate copies',
+    message: `Move ${n} to the ${binName()}?`,
+    detail:
+      shown.join('\n') +
+      `\n\nThis frees ${formatBytes(total)}. One copy of each sound stays where it is and keeps these copies' ` +
+      `tags, ratings, notes and collections. You can restore the files from the ${binName()}.`,
+    buttons: ['Cancel', `Move to ${binName()}`],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true
+  })
+  if (response !== 1) return null
+
+  let trashed = 0
+  let freed = 0
+  const failed: string[] = []
+  for (const item of items) {
+    try {
+      await shell.trashItem(item.path)
+    } catch {
+      failed.push(item.name)
+      continue
+    }
+    mergeFileData(db, item.id, item.keeperId)
+    forgetFiles(db, [item.id])
+    trashed++
+    freed += item.size
+  }
+  return { trashed, failed, freed }
+}
+
+async function trashAndReport(ids: number[]): Promise<void> {
+  const r = await trashDuplicates(ids)
+  if (!r) return
+  const notice =
+    `Moved ${r.trashed === 1 ? '1 file' : `${r.trashed} files`} to the ${binName()} (${formatBytes(r.freed)} freed)` +
+    (r.failed.length ? `. Couldn't move: ${r.failed.join(', ')}` : '')
+  libraryChanged({ notice })
 }
 
 function registerIpc(): void {
@@ -183,7 +290,12 @@ function registerIpc(): void {
   })
   ipcMain.handle('collections:remove', (_e, id: number, ids: number[]) => removeFromCollection(db, id, ids))
   ipcMain.handle('collections:forFiles', (_e, ids: number[]) => collectionsForFiles(db, ids))
-  ipcMain.on('menu:files', (e, ids: number[], ctx: { collectionId?: number }) => showFileMenu(e.sender, ids, ctx ?? {}))
+  ipcMain.on('menu:files', (e, ids: number[], ctx: { collectionId?: number; duplicates?: boolean }) => showFileMenu(e.sender, ids, ctx ?? {}))
+  ipcMain.handle('dupes:check', () => startDupeCheck())
+  ipcMain.handle('dupes:running', () => dupeWorker != null)
+  ipcMain.handle('dupes:extraIds', (_e, q: Partial<FileQuery>) => extraCopyIds(db, q))
+  ipcMain.handle('dupes:of', (_e, id: number) => duplicatesOf(db, id))
+  ipcMain.handle('dupes:trash', (_e, ids: number[]) => trashAndReport(ids))
   ipcMain.handle('tags:list', () => listTags(db))
   ipcMain.handle('tags:forFiles', (_e, ids: number[]) => tagsForFiles(db, ids))
   ipcMain.handle('tags:add', (_e, ids: number[], names: string[]) => addTags(db, ids, names))
@@ -206,6 +318,8 @@ app.whenReady().then(() => {
   registerIpc()
   handleAudioProtocol((id) => getFile(db, id))
   createWindow()
+  // Catch up on anything not yet checked (e.g. a library from before duplicate finding).
+  win!.webContents.once('did-finish-load', () => startDupeCheck())
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
@@ -217,5 +331,6 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   scanWorker?.terminate()
+  dupeWorker?.terminate()
   db?.close()
 })

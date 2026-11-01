@@ -1,11 +1,12 @@
 import { CATEGORIES, CATEGORY_LABELS, DRUM_SUBTYPES, SUBTYPE_LABELS } from '../../shared/types'
 import { useEffect, useRef, useState } from 'react'
 import type { Collection, LibraryCounts, Root, TagInfo } from '../../shared/types'
-import type { ScanState, View } from './App'
+import type { DupeState, ScanState, View } from './App'
 
 interface Props {
   roots: Root[]
   counts: LibraryCounts | null
+  dupes: DupeState
   tags: TagInfo[]
   collections: Collection[]
   /** Collection whose name is being edited inline (just created, or double-clicked). */
@@ -49,7 +50,8 @@ export function Sidebar(props: Props): React.JSX.Element {
     v.rootId === view.rootId &&
     v.favorite === view.favorite &&
     v.tagId === view.tagId &&
-    v.collectionId === view.collectionId
+    v.collectionId === view.collectionId &&
+    v.duplicates === view.duplicates
 
   const item = (label: string, v: View, count?: number, indent = false): React.JSX.Element => (
     <button
@@ -80,6 +82,7 @@ export function Sidebar(props: Props): React.JSX.Element {
           </div>
         ))}
         {item('♥  Favorites', { favorite: true }, counts?.favorites)}
+        {item(props.dupes.running ? '⧉  Duplicates…' : '⧉  Duplicates', { duplicates: true }, counts?.duplicates.extra)}
       </div>
 
       <div className="side-section">
@@ -196,6 +199,12 @@ export function Sidebar(props: Props): React.JSX.Element {
           </>
         ) : (
           scan.message && <div className="scan-msg">{scan.message}</div>
+        )}
+        {!scan.running && props.dupes.running && (
+          <div className="scan-msg">
+            Checking for duplicates
+            {props.dupes.total > 0 && ` · ${Math.round((props.dupes.done / props.dupes.total) * 100)}%`}
+          </div>
         )}
         {counts && counts.missing > 0 && <div className="scan-msg warn">{counts.missing.toLocaleString()} files missing</div>}
       </div>

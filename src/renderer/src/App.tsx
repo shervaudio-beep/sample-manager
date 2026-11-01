@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Category, Collection, DrumSubtype, FilePatch, FileRow, LibraryCounts, Root, ScanEvent, SortField, TagInfo } from '../../shared/types'
+import type { Category, Collection, DrumSubtype, DupeEvent, FilePatch, FileRow, LibraryCounts, Root, ScanEvent, SortField, TagInfo } from '../../shared/types'
 import { CATEGORY_LABELS, SUBTYPE_LABELS } from '../../shared/types'
 import { FileTable, type ClickMods } from './FileTable'
 import { activeFilterCount, FilterBar, filtersToQuery, NO_FILTERS, SearchBox, type Filters } from './FilterBar'
+import { DupesBar } from './DupesBar'
 import { Inspector } from './Inspector'
 import { PlayerBar, type PlayerHandle } from './PlayerBar'
 import { Sidebar } from './Sidebar'
@@ -23,6 +24,14 @@ export interface View {
   favorite?: boolean
   tagId?: number
   collectionId?: number
+  duplicates?: boolean
+}
+
+export interface DupeState {
+  running: boolean
+  stage: Extract<DupeEvent, { type: 'progress' }>['stage'] | null
+  done: number
+  total: number
 }
 
 const isMac = navigator.platform.toLowerCase().includes('mac')
@@ -34,6 +43,7 @@ export function App(): React.JSX.Element {
   const [collections, setCollections] = useState<Collection[]>([])
   const [renamingId, setRenamingId] = useState<number | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [dupes, setDupes] = useState<DupeState>({ running: false, stage: null, done: 0, total: 0 })
   const noticeTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   // Files being dragged out of the list, so a drop on a collection knows what it got.
   const dragIds = useRef<number[] | null>(null)
@@ -72,9 +82,23 @@ export function App(): React.JSX.Element {
       window.api.onLibraryChanged((d) => {
         refreshLibrary()
         if (d.renameCollectionId != null) setRenamingId(d.renameCollectionId)
+        if (d.notice) flash(d.notice)
       }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [refreshLibrary]
   )
+
+  // Background duplicate checking (runs after every scan).
+  useEffect(() => {
+    window.api.isCheckingDuplicates().then((running) => setDupes((d) => ({ ...d, running })))
+    return window.api.onDupeEvent((e) => {
+      if (e.type === 'progress') setDupes({ running: true, stage: e.stage, done: e.done, total: e.total })
+      else {
+        setDupes({ running: false, stage: null, done: 0, total: 0 })
+        refreshLibrary()
+      }
+    })
+  }, [refreshLibrary])
 
   useEffect(() => {
     const clear = (): void => void (dragIds.current = null)
@@ -132,6 +156,7 @@ export function App(): React.JSX.Element {
     favorite: view.favorite,
     tagId: view.tagId,
     collectionId: view.collectionId,
+    duplicates: view.duplicates,
     // A collection shows its files even when they've gone missing, so you can see what's lost.
     includeMissing: view.collectionId != null || undefined,
     ...filtersToQuery(filters, filters.search),
@@ -301,6 +326,7 @@ export function App(): React.JSX.Element {
       <Sidebar
         roots={roots}
         counts={counts}
+        dupes={dupes}
         tags={tags}
         collections={collections}
         renamingId={renamingId}
@@ -363,6 +389,21 @@ export function App(): React.JSX.Element {
             }}
           />
         </div>
+        {view.duplicates && (
+          <DupesBar
+            stats={counts?.duplicates ?? null}
+            state={dupes}
+            selected={selection.size}
+            onSelectExtra={async () => {
+              const ids = await window.api.extraCopyIds(filter)
+              setSelection(new Set(ids))
+              setFocus(null)
+              anchor.current = null
+            }}
+            onTrash={() => window.api.trashDuplicates([...selection])}
+            onCheck={() => window.api.checkDuplicates()}
+          />
+        )}
         <FilterBar filters={filters} onChange={(f) => setFilters({ ...f, search: filters.search })} />
         <FileTable
           list={list}
@@ -383,10 +424,15 @@ export function App(): React.JSX.Element {
               selectOne(index, row, false)
               ids = [row.id]
             }
-            window.api.showFileMenu(ids, { collectionId: view.collectionId })
+            window.api.showFileMenu(ids, { collectionId: view.collectionId, duplicates: view.duplicates })
           }}
+          groupDuplicates={!!view.duplicates}
           emptyText={
-            view.collectionId != null && !filters.search && !activeFilterCount(filters)
+            view.duplicates && !filters.search && !activeFilterCount(filters)
+              ? dupes.running
+                ? 'Checking for duplicates…'
+                : 'No duplicates found. Every sound in your library is there once.'
+              : view.collectionId != null && !filters.search && !activeFilterCount(filters)
               ? 'This collection is empty. Drag files onto it in the sidebar, or right-click files › Add to Collection.'
               : filters.search || activeFilterCount(filters)
               ? 'No files match this search and these filters.'
@@ -394,7 +440,14 @@ export function App(): React.JSX.Element {
           }
         />
       </main>
-      <Inspector ids={[...selection]} version={version} allTags={tags} allCollections={collections} onChanged={refreshLibrary} />
+      <Inspector
+        ids={[...selection]}
+        version={version}
+        allTags={tags}
+        allCollections={collections}
+        onChanged={refreshLibrary}
+        onShowDuplicates={() => changeView({ duplicates: true })}
+      />
       <PlayerBar ref={player} version={version} />
     </div>
   )
@@ -403,6 +456,7 @@ export function App(): React.JSX.Element {
 function viewTitle(view: View, roots: Root[], tags: TagInfo[], collections: Collection[]): string {
   if (view.rootId != null) return roots.find((r) => r.id === view.rootId)?.path ?? 'Folder'
   if (view.favorite) return 'Favorites'
+  if (view.duplicates) return 'Duplicates'
   if (view.collectionId != null) return collections.find((c) => c.id === view.collectionId)?.name ?? 'Collection'
   if (view.tagId != null) return '# ' + (tags.find((t) => t.id === view.tagId)?.name ?? 'Tag')
   if (view.subtype) return 'Drums › ' + SUBTYPE_LABELS[view.subtype]

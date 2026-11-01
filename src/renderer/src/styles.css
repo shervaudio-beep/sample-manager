@@ -1198,3 +1198,88 @@ select.input {
   flex: 1 1 0;
   min-width: 0;
 }
+
+/* ---------- duplicates (milestone 6) ---------- */
+
+.dupebar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 12px;
+}
+
+.dupebar-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  color: var(--muted);
+}
+
+.dupebar-text b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.btn.small {
+  margin-top: 0;
+  padding: 4px 9px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.btn.danger:not(:disabled) {
+  border-color: rgba(255, 107, 107, 0.5);
+  color: #ff8f8f;
+}
+
+.btn.danger:hover:not(:disabled) {
+  background: rgba(255, 107, 107, 0.12);
+}
+
+.tr.group-start {
+  border-top: 1px solid #3a404b;
+}
+
+.insp-dupe {
+  margin-top: 12px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(139, 123, 255, 0.08);
+  border: 1px solid rgba(139, 123, 255, 0.3);
+  font-size: 12px;
+}
+
+.insp-dupe-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: var(--cat-beat);
+  margin-bottom: 4px;
+}
+
+.insp-dupe-path {
+  display: block;
+  width: 100%;
+  padding: 2px 0;
+  text-align: left;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.insp-dupe-path:hover {
+  color: var(--text);
+}
+
+.insp-dupe-more {
+  color: var(--faint);
+}

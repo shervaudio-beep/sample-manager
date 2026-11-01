@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { Collection, FilePatch, FileQuery, FileRow, LibraryCounts, Root, ScanEvent, TagInfo } from '../shared/types'
+import type { Collection, DupeEvent, FilePatch, FileQuery, FileRow, LibraryCounts, Root, ScanEvent, TagInfo } from '../shared/types'
 import type { Waveform } from '../main/db'
 
 const api = {
@@ -24,9 +24,20 @@ const api = {
     ipcRenderer.invoke('collections:addPaths', id, files.map((f) => webUtils.getPathForFile(f)).filter(Boolean)),
   removeFromCollection: (id: number, ids: number[]): Promise<void> => ipcRenderer.invoke('collections:remove', id, ids),
   collectionsForFiles: (ids: number[]): Promise<Collection[]> => ipcRenderer.invoke('collections:forFiles', ids),
-  showFileMenu: (ids: number[], ctx: { collectionId?: number }): void => ipcRenderer.send('menu:files', ids, ctx),
-  onLibraryChanged: (cb: (detail: { renameCollectionId?: number }) => void): (() => void) => {
-    const listener = (_: unknown, d: { renameCollectionId?: number }): void => cb(d)
+  showFileMenu: (ids: number[], ctx: { collectionId?: number; duplicates?: boolean }): void => ipcRenderer.send('menu:files', ids, ctx),
+  checkDuplicates: (): Promise<void> => ipcRenderer.invoke('dupes:check'),
+  isCheckingDuplicates: (): Promise<boolean> => ipcRenderer.invoke('dupes:running'),
+  extraCopyIds: (q: Partial<FileQuery>): Promise<number[]> => ipcRenderer.invoke('dupes:extraIds', q),
+  duplicatesOf: (id: number): Promise<FileRow[]> => ipcRenderer.invoke('dupes:of', id),
+  /** Asks for confirmation in a native dialog before anything is moved. */
+  trashDuplicates: (ids: number[]): Promise<void> => ipcRenderer.invoke('dupes:trash', ids),
+  onDupeEvent: (cb: (e: DupeEvent) => void): (() => void) => {
+    const listener = (_: unknown, e: DupeEvent): void => cb(e)
+    ipcRenderer.on('dupes:event', listener)
+    return () => ipcRenderer.removeListener('dupes:event', listener)
+  },
+  onLibraryChanged: (cb: (detail: { renameCollectionId?: number; notice?: string }) => void): (() => void) => {
+    const listener = (_: unknown, d: { renameCollectionId?: number; notice?: string }): void => cb(d)
     ipcRenderer.on('library:changed', listener)
     return () => ipcRenderer.removeListener('library:changed', listener)
   },

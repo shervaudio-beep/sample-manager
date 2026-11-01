@@ -88,6 +88,10 @@ export interface FileRow {
   notes: string
   tags: string[]
   dateAdded: number
+  /** Hash of the audio content, once duplicate checking has looked at this file. */
+  audioHash: string | null
+  /** How many other files (present on disk) have exactly the same audio. */
+  dupCount: number
 }
 
 /** A user edit to one or more files. Category, type, BPM and key become 'manual' and survive rescans. */
@@ -125,6 +129,8 @@ export interface FileQuery {
   favorite?: boolean
   tagId?: number
   collectionId?: number
+  /** Only files that have an exact audio duplicate; groups are kept together. */
+  duplicates?: boolean
   /** Words to find in name, folders, tags and notes. */
   search?: string
   bpmMin?: number
@@ -148,9 +154,23 @@ export interface LibraryCounts {
   total: number
   missing: number
   favorites: number
+  duplicates: DuplicateStats
   byCategory: Record<Category, number>
   bySubtype: Record<DrumSubtype, number>
 }
+
+export interface DuplicateStats {
+  /** Sets of files with identical audio. */
+  groups: number
+  /** Copies beyond the first in each set: what could go. */
+  extra: number
+  extraBytes: number
+}
+
+export type DupeEvent =
+  | { type: 'progress'; stage: 'locating' | 'comparing' | 'verifying'; done: number; total: number }
+  | { type: 'done'; groups: number }
+  | { type: 'error'; message: string }
 
 export type ScanEvent =
   | { type: 'start'; rootId: number; path: string }

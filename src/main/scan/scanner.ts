@@ -207,7 +207,8 @@ export async function scanRoot(db: Db, rootId: number, opts: ScanOptions = {}): 
   // Changed file: refresh technical metadata; only overwrite auto-derived fields, never manual ones.
   const update = db.prepare(`
     UPDATE files SET size = ?, mtime_ms = ?, status = 'ok', last_seen_scan = ?, scan_error = ?,
-      duration_ms = ?, sample_rate = ?, bit_depth = ?, channels = ?, audio_hash = NULL,
+      duration_ms = ?, sample_rate = ?, bit_depth = ?, channels = ?,
+      audio_hash = NULL, audio_qhash = NULL, audio_offset = NULL, audio_len = NULL,
       category      = CASE WHEN category_source = 'manual' THEN category ELSE ? END,
       category_conf = CASE WHEN category_source = 'manual' THEN category_conf ELSE ? END,
       subtype       = CASE WHEN subtype_source = 'manual' THEN subtype ELSE ? END,
@@ -326,7 +327,8 @@ function relinkMoved(db: Db, newIds: number[]): number {
   const drop = db.prepare('DELETE FROM files WHERE id = ?')
   const move = db.prepare(`
     UPDATE files SET root_id = ?, path = ?, rel_path = ?, mtime_ms = ?, status = 'ok', last_seen_scan = ?,
-      duration_ms = ?, sample_rate = ?, bit_depth = ?, channels = ?, scan_error = ?
+      duration_ms = ?, sample_rate = ?, bit_depth = ?, channels = ?, scan_error = ?,
+      audio_hash = NULL, audio_qhash = NULL, audio_offset = NULL, audio_len = NULL
     WHERE id = ?`)
 
   let relinked = 0
